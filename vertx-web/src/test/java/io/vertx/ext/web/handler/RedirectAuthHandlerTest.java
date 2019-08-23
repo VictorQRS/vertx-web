@@ -99,7 +99,6 @@ public class RedirectAuthHandlerTest extends AuthHandlerTestBase {
     formLoginHandler.setUsernameParam(usernameParam).setPasswordParam(passwordParam);
     router.route().handler(LoggerHandler.create());
     router.route().handler(BodyHandler.create());
-    router.route().handler(CookieHandler.create());
     router.route("/login").handler(formLoginHandler);
     testRequest(HttpMethod.POST, "/login", sendLoginRequestConsumer(), resp -> {
     }, 200, "OK", "<html><body><h1>Login successful</h1></body></html>");
@@ -114,7 +113,6 @@ public class RedirectAuthHandlerTest extends AuthHandlerTestBase {
     formLoginHandler.setUsernameParam(usernameParam).setPasswordParam(passwordParam).setDirectLoggedInOKURL(loggedInDirectOKPage);
     router.route().handler(LoggerHandler.create());
     router.route().handler(BodyHandler.create());
-    router.route().handler(CookieHandler.create());
     router.route("/login").handler(formLoginHandler);
     testRequest(HttpMethod.POST, "/login", sendLoginRequestConsumer(), resp -> {
       String location = resp.headers().get("location");
@@ -156,10 +154,8 @@ public class RedirectAuthHandlerTest extends AuthHandlerTestBase {
   @Test
   public void testRedirectWithParams() throws Exception {
     router.route().handler(BodyHandler.create());
-    router.route().handler(CookieHandler.create());
     SessionStore store = LocalSessionStore.create(vertx);
-    router.route().handler(SessionHandler.create(store));
-    router.route().handler(UserSessionHandler.create(authProvider));
+    router.route().handler(SessionHandler.create(store).setAuthProvider(authProvider));
     AuthHandler authHandler = RedirectAuthHandler.create(authProvider);
 
     router.route("/protected/*").handler(authHandler);
@@ -246,10 +242,8 @@ public class RedirectAuthHandlerTest extends AuthHandlerTestBase {
 
   private void doLoginCommon(Handler<RoutingContext> handler, Set<String> authorities) throws Exception {
     router.route().handler(BodyHandler.create());
-    router.route().handler(CookieHandler.create());
     SessionStore store = LocalSessionStore.create(vertx);
-    router.route().handler(SessionHandler.create(store));
-    router.route().handler(UserSessionHandler.create(authProvider));
+    router.route().handler(SessionHandler.create(store).setAuthProvider(authProvider));
     AuthHandler authHandler = RedirectAuthHandler.create(authProvider);
     if (authorities != null) {
       authHandler.addAuthorities(authorities);

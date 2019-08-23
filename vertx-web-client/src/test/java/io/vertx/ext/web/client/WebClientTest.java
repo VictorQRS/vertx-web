@@ -12,6 +12,7 @@ import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.net.ProxyOptions;
 import io.vertx.core.net.ProxyType;
+import io.vertx.core.net.SocketAddress;
 import io.vertx.core.streams.ReadStream;
 import io.vertx.core.streams.WriteStream;
 import io.vertx.ext.web.client.jackson.WineAndCheese;
@@ -29,9 +30,12 @@ import org.junit.rules.TemporaryFolder;
 import java.io.File;
 import java.net.ConnectException;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -43,6 +47,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.stream.IntStream;
 
 import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.CoreMatchers.not;
@@ -55,7 +60,6 @@ public class WebClientTest extends HttpTestBase {
   @Rule
   public TemporaryFolder testFolder = new TemporaryFolder();
 
-  private File testFile;
   private WebClient client;
 
   @Override
@@ -73,7 +77,6 @@ public class WebClientTest extends HttpTestBase {
     client = WebClient.wrap(super.client);
     server.close();
     server = vertx.createHttpServer(new HttpServerOptions().setPort(DEFAULT_HTTP_PORT).setHost(DEFAULT_HTTP_HOST));
-    testFile = testFolder.newFile("test.txt");
   }
 
   @Test
@@ -131,6 +134,17 @@ public class WebClientTest extends HttpTestBase {
   @Test
   public void testUserAgentHeaderOverride() throws Exception {
     testRequest(client -> client.get("somehost", "somepath").putHeader(HttpHeaders.USER_AGENT.toString(), "smith"), req -> assertEquals(Collections.singletonList("smith"), req.headers().getAll(HttpHeaders.USER_AGENT)));
+  }
+
+  @Test
+  public void testPutHeaders() throws Exception {
+    MultiMap headers = MultiMap.caseInsensitiveMultiMap();
+    headers.add("foo","bar");
+    headers.add("ping","pong");
+    testRequest(client -> client.get("somehost", "somepath").putHeaders(headers), req -> {
+      assertEquals("bar", req.headers().get("foo"));
+      assertEquals("pong", req.headers().get("ping"));
+    });
   }
 
   @Test
@@ -490,23 +504,32 @@ public class WebClientTest extends HttpTestBase {
   }
 
   @Test
-  public void testResponseBodyAsAsJsonObject() throws Exception {
-    JsonObject expected = new JsonObject().put("cheese", "Goat Cheese").put("wine", "Condrieu");
-    server.requestHandler(req -> req.response().end(expected.encode()));
-    startServer();
-    HttpRequest<Buffer> get = client.get(DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, "/somepath");
-    get
-      .as(BodyCodec.jsonObject())
-      .send(onSuccess(resp -> {
+  public void testNullLiteralResponseBodyAsJsonObject() throws Exception {
+    this.testResponseBodyAs(BodyCodec.jsonObject(), "null", this.onSuccess(resp -> {
       assertEquals(200, resp.statusCode());
-      assertEquals(expected, resp.body());
+      assertEquals(null, resp.body());
       testComplete();
     }));
-    await();
   }
 
   @Test
-  public void testResponseBodyAsAsJsonMapped() throws Exception {
+  public void testAnotherJsonResponseBodyAsJsonObject() throws Exception {
+    this.testResponseBodyAs(BodyCodec.jsonObject(), "1234", this.onFailure(err -> {
+      assertEquals(DecodeException.class, err.getClass());
+      testComplete();
+    }));
+  }
+
+  @Test
+  public void testInvalidJsonResponseBodyAsJsonObject() throws Exception {
+    this.testResponseBodyAs(BodyCodec.jsonObject(), "\"1234", this.onFailure(err -> {
+      assertEquals(DecodeException.class, err.getClass());
+      testComplete();
+    }));
+  }
+
+  @Test
+  public void testResponseBodyAsJsonMapped() throws Exception {
     JsonObject expected = new JsonObject().put("cheese", "Goat Cheese").put("wine", "Condrieu");
     server.requestHandler(req -> req.response().end(expected.encode()));
     startServer();
@@ -522,7 +545,32 @@ public class WebClientTest extends HttpTestBase {
   }
 
   @Test
-  public void testResponseBodyAsAsJsonArray() throws Exception {
+  public void testNullLiteralResponseBodyAsJsonMapped() throws Exception {
+    this.testResponseBodyAs(BodyCodec.json(WineAndCheese.class), "null", this.onSuccess(resp -> {
+      assertEquals(200, resp.statusCode());
+      assertEquals(null, resp.body());
+      testComplete();
+    }));
+  }
+
+  @Test
+  public void testAnotherJsonResponseBodyAsJsonMapped() throws Exception {
+    this.testResponseBodyAs(BodyCodec.json(WineAndCheese.class), "1234", this.onFailure(err -> {
+      assertEquals(DecodeException.class, err.getClass());
+      testComplete();
+    }));
+  }
+
+  @Test
+  public void testInvalidJsonResponseBodyAsJsonMapped() throws Exception {
+    this.testResponseBodyAs(BodyCodec.json(WineAndCheese.class), "\"1234", this.onFailure(err -> {
+      assertEquals(DecodeException.class, err.getClass());
+      testComplete();
+    }));
+  }
+
+  @Test
+  public void testResponseBodyAsJsonArray() throws Exception {
     JsonArray expected = new JsonArray().add("cheese").add("wine");
     server.requestHandler(req -> req.response().end(expected.encode()));
     startServer();
@@ -538,7 +586,32 @@ public class WebClientTest extends HttpTestBase {
   }
 
   @Test
-  public void testResponseBodyAsAsJsonArrayMapped() throws Exception {
+  public void testNullLiteralResponseBodyAsJsonArray() throws Exception {
+    this.testResponseBodyAs(BodyCodec.jsonArray(), "null", this.onSuccess(resp -> {
+      assertEquals(200, resp.statusCode());
+      assertEquals(null, resp.body());
+      testComplete();
+    }));
+  }
+
+  @Test
+  public void testAnotherJsonResponseBodyAsJsonArray() throws Exception {
+    this.testResponseBodyAs(BodyCodec.jsonArray(), "1234", this.onFailure(err -> {
+      assertEquals(DecodeException.class, err.getClass());
+      testComplete();
+    }));
+  }
+
+  @Test
+  public void testInvalidJsonResponseBodyAsJsonArray() throws Exception {
+    this.testResponseBodyAs(BodyCodec.jsonArray(), "\"1234", this.onFailure(err -> {
+      assertEquals(DecodeException.class, err.getClass());
+      testComplete();
+    }));
+  }
+
+  @Test
+  public void testResponseBodyAsJsonArrayMapped() throws Exception {
     JsonArray expected = new JsonArray().add("cheese").add("wine");
     server.requestHandler(req -> req.response().end(expected.encode()));
     startServer();
@@ -554,78 +627,154 @@ public class WebClientTest extends HttpTestBase {
   }
 
   @Test
-  public void testResponseBodyDiscarded() throws Exception {
-    server.requestHandler(req -> req.response().end(TestUtils.randomAlphaString(1024)));
-    startServer();
-    HttpRequest<Buffer> get = client.get(DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, "/somepath");
-    get
-      .as(BodyCodec.none())
-      .send(onSuccess(resp -> {
+  public void testNullLiteralResponseBodyAsJsonArrayMapped() throws Exception {
+    this.testResponseBodyAs(BodyCodec.json(List.class), "null", this.onSuccess(resp -> {
       assertEquals(200, resp.statusCode());
       assertEquals(null, resp.body());
       testComplete();
     }));
+  }
+
+  @Test
+  public void testAnotherJsonResponseBodyAsJsonArrayMapped() throws Exception {
+    this.testResponseBodyAs(BodyCodec.json(List.class), "1234", this.onFailure(err -> {
+      assertEquals(DecodeException.class, err.getClass());
+      testComplete();
+    }));
+  }
+
+  @Test
+  public void testInvalidJsonResponseBodyAsJsonArrayMapped() throws Exception {
+    this.testResponseBodyAs(BodyCodec.json(List.class), "\"1234", this.onFailure(err -> {
+      assertEquals(DecodeException.class, err.getClass());
+      testComplete();
+    }));
+  }
+
+  private <T> void testResponseBody(String body, Handler<AsyncResult<HttpResponse<Buffer>>> checker) throws Exception {
+    server.requestHandler(req -> req.response().end(body));
+    startServer();
+    HttpRequest<Buffer> get = client.get(DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, "/somepath");
+    get.send(checker);
     await();
+  }
+
+  private <T> void testResponseBodyAs(BodyCodec<T> bodyCodec, String body, Handler<AsyncResult<HttpResponse<T>>> checker) throws Exception {
+    server.requestHandler(req -> req.response().end(body));
+    startServer();
+    HttpRequest<Buffer> get = client.get(DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, "/somepath");
+    get
+      .as(bodyCodec)
+      .send(checker);
+    await();
+  }
+
+  @Test
+  public void testResponseBodyDiscarded() throws Exception {
+    testResponseBodyAs(BodyCodec.none(), TestUtils.randomAlphaString(1024), onSuccess(resp -> {
+      assertEquals(200, resp.statusCode());
+      assertEquals(null, resp.body());
+      testComplete();
+    }));
   }
 
   @Test
   public void testResponseUnknownContentTypeBodyAsJsonObject() throws Exception {
     JsonObject expected = new JsonObject().put("cheese", "Goat Cheese").put("wine", "Condrieu");
-    server.requestHandler(req -> req.response().end(expected.encode()));
-    startServer();
-    HttpRequest<Buffer> get = client.get(DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, "/somepath");
-    get.send(onSuccess(resp -> {
+    testResponseBody(expected.encode(), onSuccess(resp -> {
       assertEquals(200, resp.statusCode());
       assertEquals(expected, resp.bodyAsJsonObject());
       testComplete();
     }));
-    await();
   }
 
   @Test
   public void testResponseUnknownContentTypeBodyAsJsonArray() throws Exception {
     JsonArray expected = new JsonArray().add("cheese").add("wine");
-    server.requestHandler(req -> req.response().end(expected.encode()));
-    startServer();
-    HttpRequest<Buffer> get = client.get(DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, "/somepath");
-    get.send(onSuccess(resp -> {
+    testResponseBody(expected.encode(), onSuccess(resp -> {
       assertEquals(200, resp.statusCode());
       assertEquals(expected, resp.bodyAsJsonArray());
       testComplete();
     }));
-    await();
   }
 
   @Test
   public void testResponseUnknownContentTypeBodyAsJsonMapped() throws Exception {
     JsonObject expected = new JsonObject().put("cheese", "Goat Cheese").put("wine", "Condrieu");
-    server.requestHandler(req -> req.response().end(expected.encode()));
-    startServer();
-    HttpRequest<Buffer> get = client.get(DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, "/somepath");
-    get.send(onSuccess(resp -> {
+    testResponseBody(expected.encode(), onSuccess(resp -> {
       assertEquals(200, resp.statusCode());
       assertEquals(new WineAndCheese().setCheese("Goat Cheese").setWine("Condrieu"), resp.bodyAsJson(WineAndCheese.class));
       testComplete();
     }));
-    await();
   }
 
   @Test
-  public void testResponseBodyUnmarshallingError() throws Exception {
-    server.requestHandler(req -> req.response().end("not-json-object"));
-    startServer();
-    HttpRequest<Buffer> get = client.get(DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, "/somepath");
-    get
-      .as(BodyCodec.jsonObject())
-      .send(onFailure(err -> {
-      assertTrue(err instanceof DecodeException);
+  public void testResponseInvalidContentTypeBodyAs() throws Exception {
+    testResponseBody("\"1234", onSuccess(resp -> {
+      assertEquals(200, resp.statusCode());
+      try {
+        resp.bodyAsJsonObject();
+        fail();
+      } catch (DecodeException ignore) {
+      }
+      try {
+        resp.bodyAsJsonArray();
+        fail();
+      } catch (DecodeException ignore) {
+      }
+      try {
+        resp.bodyAsJson(WineAndCheese.class);
+        fail();
+      } catch (DecodeException ignore) {
+      }
       testComplete();
     }));
-    await();
+  }
+  @Test
+  public void testResponseAnotherContentTypeBodyAs() throws Exception {
+    testResponseBody("1234", onSuccess(resp -> {
+      assertEquals(200, resp.statusCode());
+      try {
+        resp.bodyAsJsonObject();
+        fail();
+      } catch (DecodeException ignore) {
+      }
+      try {
+        resp.bodyAsJsonArray();
+        fail();
+      } catch (DecodeException ignore) {
+      }
+      try {
+        resp.bodyAsJson(WineAndCheese.class);
+        fail();
+      } catch (DecodeException ignore) {
+      }
+      testComplete();
+    }));
+  }
+
+  @Test
+  public void testResponseNullContentTypeBodyAs() throws Exception {
+    testResponseBody("null", onSuccess(resp -> {
+      assertEquals(200, resp.statusCode());
+      assertEquals(null, resp.bodyAsJsonObject());
+      assertEquals(null, resp.bodyAsJsonArray());
+      assertEquals(null, resp.bodyAsJson(WineAndCheese.class));
+      testComplete();
+    }));
+  }
+
+  @Test
+  public void testResponseBodyStreamNoClose() throws Exception {
+	  testResponseBodyStream(false);
   }
 
   @Test
   public void testResponseBodyStream() throws Exception {
+	  testResponseBodyStream(true);
+  }
+
+  public void testResponseBodyStream(boolean close) throws Exception {
     AtomicBoolean paused = new AtomicBoolean();
     server.requestHandler(req -> {
       HttpServerResponse resp = req.response();
@@ -660,13 +809,24 @@ public class WebClientTest extends HttpTestBase {
         return this;
       }
       @Override
-      public WriteStream<Buffer> write(Buffer data) {
-        size.addAndGet(data.length());
-        return this;
+      public Future<Void> write(Buffer data) {
+        Promise<Void> promise = Promise.promise();
+        write(data, promise);
+        return promise.future();
       }
       @Override
-      public void end() {
+      public void write(Buffer data, Handler<AsyncResult<Void>> handler) {
+        size.addAndGet(data.length());
+        if (handler != null) {
+          handler.handle(Future.succeededFuture());
+        }
+      }
+      @Override
+      public void end(Handler<AsyncResult<Void>> handler) {
         ended.set(true);
+        if (handler != null) {
+          handler.handle(Future.succeededFuture());
+        }
       }
       @Override
       public WriteStream<Buffer> setWriteQueueMaxSize(int maxSize) {
@@ -684,9 +844,9 @@ public class WebClientTest extends HttpTestBase {
     };
     HttpRequest<Buffer> get = client.get(DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, "/somepath");
     get
-      .as(BodyCodec.pipe(stream))
+      .as(BodyCodec.pipe(stream, close))
       .send(onSuccess(resp -> {
-      assertTrue(ended.get());
+      assertEquals(close, ended.get());
       assertEquals(200, resp.statusCode());
       assertEquals(null, resp.body());
       testComplete();
@@ -713,12 +873,29 @@ public class WebClientTest extends HttpTestBase {
         return this;
       }
       @Override
-      public WriteStream<Buffer> write(Buffer data) {
-        received.addAndGet(data.length());
-        return this;
+      public Future<Void> write(Buffer data) {
+        Promise<Void> promise = Promise.promise();
+        write(data, promise);
+        return promise.future();
       }
       @Override
-      public void end() {
+      public void write(Buffer data, Handler<AsyncResult<Void>> handler) {
+        received.addAndGet(data.length());
+        if (handler != null) {
+          handler.handle(Future.succeededFuture());
+        }
+      }
+      @Override
+      public Future<Void> end() {
+        Promise<Void> promise = Promise.promise();
+        end(promise);
+        return promise.future();
+      }
+      @Override
+      public void end(Handler<AsyncResult<Void>> handler) {
+        if (handler != null) {
+          handler.handle(Future.succeededFuture());
+        }
       }
       @Override
       public WriteStream<Buffer> setWriteQueueMaxSize(int maxSize) {
@@ -759,12 +936,25 @@ public class WebClientTest extends HttpTestBase {
         return this;
       }
       @Override
-      public WriteStream<Buffer> write(Buffer data) {
-        exceptionHandler.handle(cause);
-        return this;
+      public Future<Void> write(Buffer data) {
+        Promise<Void> promise = Promise.promise();
+        write(data, promise);
+        return promise.future();
       }
       @Override
-      public void end() {
+      public void write(Buffer data, Handler<AsyncResult<Void>> handler) {
+        exceptionHandler.handle(cause);
+        if (handler != null) {
+          handler.handle(Future.failedFuture(cause));
+        }
+      }
+      @Override
+      public Future<Void> end() {
+        throw new AssertionError();
+      }
+      @Override
+      public void end(Handler<AsyncResult<Void>> handler) {
+        throw new AssertionError();
       }
       @Override
       public WriteStream<Buffer> setWriteQueueMaxSize(int maxSize) {
@@ -799,6 +989,12 @@ public class WebClientTest extends HttpTestBase {
     AtomicLong received = new AtomicLong();
     AtomicBoolean closed = new AtomicBoolean();
     AsyncFile file = new AsyncFile() {
+      public Future<Void> write(Buffer buffer, long position) {
+        throw new UnsupportedOperationException();
+      }
+      public Future<Buffer> read(Buffer buffer, int offset, long position, int length) {
+        throw new UnsupportedOperationException();
+      }
       public AsyncFile handler(Handler<Buffer> handler) { throw new UnsupportedOperationException(); }
       public AsyncFile pause() { throw new UnsupportedOperationException(); }
       public AsyncFile resume() { throw new UnsupportedOperationException(); }
@@ -806,11 +1002,12 @@ public class WebClientTest extends HttpTestBase {
       public AsyncFile setWriteQueueMaxSize(int i) { throw new UnsupportedOperationException(); }
       public AsyncFile drainHandler(Handler<Void> handler) { throw new UnsupportedOperationException(); }
       public AsyncFile fetch(long l) { throw new UnsupportedOperationException(); }
-      public void end() { throw new UnsupportedOperationException(); }
-      public void close() { throw new UnsupportedOperationException(); }
-      public AsyncFile write(Buffer buffer, long l, Handler<AsyncResult<Void>> handler) { throw new UnsupportedOperationException(); }
+      public Future<Void> end() { return close(); }
+      public void end(Handler<AsyncResult<Void>> handler) { close(handler); }
+      public Future<Void> close() { throw new UnsupportedOperationException(); }
+      public void write(Buffer buffer, long l, Handler<AsyncResult<Void>> handler) { throw new UnsupportedOperationException(); }
       public AsyncFile read(Buffer buffer, int i, long l, int i1, Handler<AsyncResult<Buffer>> handler) { throw new UnsupportedOperationException(); }
-      public AsyncFile flush() { throw new UnsupportedOperationException(); }
+      public Future<Void> flush() { throw new UnsupportedOperationException(); }
       public AsyncFile flush(Handler<AsyncResult<Void>> handler) { throw new UnsupportedOperationException(); }
       public AsyncFile setReadPos(long l) { throw new UnsupportedOperationException(); }
       public AsyncFile setReadLength(long l) { throw new UnsupportedOperationException(); }
@@ -825,9 +1022,16 @@ public class WebClientTest extends HttpTestBase {
       public long getWritePos() {
         throw new UnsupportedOperationException();
       }
-      public AsyncFile write(Buffer buffer) {
+      public Future<Void> write(Buffer buffer) {
+        Promise<Void> promise = Promise.promise();
+        write(buffer, promise);
+        return promise.future();
+      }
+      public void write(Buffer buffer, Handler<AsyncResult<Void>> handler) {
         received.addAndGet(buffer.length());
-        return this;
+        if (handler != null) {
+          handler.handle(Future.succeededFuture());
+        }
       }
       public void close(Handler<AsyncResult<Void>> handler) {
         vertx.setTimer(500, id -> {
@@ -867,13 +1071,24 @@ public class WebClientTest extends HttpTestBase {
         return this;
       }
       @Override
-      public WriteStream<Buffer> write(Buffer data) {
-        length.addAndGet(data.length());
-        return this;
+      public Future<Void> write(Buffer data) {
+        Promise<Void> promise = Promise.promise();
+        write(data, promise);
+        return promise.future();
       }
       @Override
-      public void end() {
+      public void write(Buffer data, Handler<AsyncResult<Void>> handler) {
+        length.addAndGet(data.length());
+        if (handler != null) {
+          handler.handle(Future.succeededFuture());
+        }
+      }
+      @Override
+      public void end(Handler<AsyncResult<Void>> handler) {
         ended.set(true);
+        if (handler != null) {
+          handler.handle(Future.succeededFuture());
+        }
       }
       @Override
       public WriteStream<Buffer> setWriteQueueMaxSize(int maxSize) {
@@ -909,7 +1124,11 @@ public class WebClientTest extends HttpTestBase {
 
   @Test
   public void testHttpResponseError() throws Exception {
-    server.requestHandler(req -> req.response().setChunked(true).write(Buffer.buffer("some-data")).close());
+    server.requestHandler(req -> {
+      HttpServerResponse resp = req.response();
+      resp.setChunked(true).write(Buffer.buffer("some-data"));
+      resp.close();
+    });
     startServer();
     HttpRequest<Buffer> get = client.get(DEFAULT_HTTP_PORT, DEFAULT_HTTP_HOST, "/somepath");
     get
@@ -1031,38 +1250,139 @@ public class WebClientTest extends HttpTestBase {
 
   private void testFileUploadFormMultipart(int size) throws Exception {
     Buffer content = Buffer.buffer(TestUtils.randomAlphaString(size));
+    List<Upload> toUpload = Collections.singletonList(new Upload("test", "test.txt", content));
+    MultipartForm form = MultipartForm.create()
+      .attribute("toolkit", "vert.x")
+      .attribute("runtime", "jvm");
+    testFileUploadFormMultipart(form, toUpload, true, (req, uploads) -> {
+      assertEquals("vert.x", req.getFormAttribute("toolkit"));
+      assertEquals("jvm", req.getFormAttribute("runtime"));
+      assertEquals(1, uploads.size());
+      assertEquals("test", uploads.get(0).name);
+      assertEquals("test.txt", uploads.get(0).filename);
+      assertEquals(content, uploads.get(0).data);
+    });
+  }
 
-    vertx.fileSystem().writeFileBlocking(testFile.getPath(), content);
+  @Test
+  public void testFileUploadsFormMultipart() throws Exception {
+    Buffer content1 = Buffer.buffer(TestUtils.randomAlphaString(16));
+    Buffer content2 = Buffer.buffer(TestUtils.randomAlphaString(16));
+    List<Upload> toUpload = Arrays.asList(
+      new Upload("test1", "test1.txt", content1),
+      new Upload("test2", "test2.txt", content2)
+    );
+    testFileUploadFormMultipart(MultipartForm.create(), toUpload, true, (req, uploads) -> {
+      assertEquals(2, uploads.size());
+      assertEquals("test1", uploads.get(0).name);
+      assertEquals("test1.txt", uploads.get(0).filename);
+      assertEquals(content1, uploads.get(0).data);
+      assertEquals("test2", uploads.get(1).name);
+      assertEquals("test2.txt", uploads.get(1).filename);
+      assertEquals(content2, uploads.get(1).data);
+    });
+  }
+
+  @Test
+  public void testFileUploadsSameNameFormMultipart() throws Exception {
+    Buffer content1 = Buffer.buffer(TestUtils.randomAlphaString(16));
+    Buffer content2 = Buffer.buffer(TestUtils.randomAlphaString(16));
+    List<Upload> toUpload = Arrays.asList(
+      new Upload("test", "test1.txt", content1),
+      new Upload("test", "test2.txt", content2)
+    );
+    testFileUploadFormMultipart(MultipartForm.create(), toUpload, true, (req, uploads) -> {
+      assertEquals(2, uploads.size());
+      assertEquals("test", uploads.get(0).name);
+      assertEquals("test1.txt", uploads.get(0).filename);
+      assertEquals(content1, uploads.get(0).data);
+      assertEquals("test", uploads.get(1).name);
+      assertEquals("test2.txt", uploads.get(1).filename);
+      assertEquals(content2, uploads.get(1).data);
+    });
+  }
+
+  @Test
+  public void testFileUploadsSameNameFormMultipartDisableMultipartMixed() throws Exception {
+    Buffer content1 = Buffer.buffer(TestUtils.randomAlphaString(16));
+    Buffer content2 = Buffer.buffer(TestUtils.randomAlphaString(16));
+    List<Upload> toUpload = Arrays.asList(
+      new Upload("test", "test1.txt", content1),
+      new Upload("test", "test2.txt", content2)
+    );
+    testFileUploadFormMultipart(MultipartForm.create(), toUpload, false, (req, uploads) -> {
+      assertEquals(2, uploads.size());
+      assertEquals("test", uploads.get(0).name);
+      assertEquals("test1.txt", uploads.get(0).filename);
+      assertEquals(content1, uploads.get(0).data);
+      assertEquals("test", uploads.get(1).name);
+      assertEquals("test2.txt", uploads.get(1).filename);
+      assertEquals(content2, uploads.get(1).data);
+    });
+  }
+
+  private void testFileUploadFormMultipart(MultipartForm form, List<Upload> toUpload, boolean multipartMixed, BiConsumer<HttpServerRequest, List<Upload>> checker) throws Exception {
+    File[] testFiles = new File[toUpload.size()];
+    for (int i = 0;i < testFiles.length;i++) {
+      String name = toUpload.get(i).filename;
+      testFiles[i] = testFolder.newFile(name);
+      vertx.fileSystem().writeFileBlocking(testFiles[i].getPath(), toUpload.get(i).data);
+    }
 
     server.requestHandler(req -> {
       req.setExpectMultipart(true);
+      AtomicInteger idx = new AtomicInteger();
+      List<Upload> uploads = new ArrayList<>();
       req.uploadHandler(upload -> {
+        int val = idx.getAndIncrement();
         Buffer fileBuffer = Buffer.buffer();
-        assertEquals("file", upload.name());
-        assertEquals("test.txt", upload.filename());
         assertEquals("text/plain", upload.contentType());
         upload.handler(fileBuffer::appendBuffer);
-        upload.endHandler(v -> assertEquals(content, fileBuffer));
+        upload.endHandler(v -> {
+          uploads.add(new Upload(upload.name(), upload.filename(), fileBuffer));
+        });
       });
       req.endHandler(v -> {
-        assertEquals("vert.x", req.getFormAttribute("toolkit"));
-        assertEquals("jvm", req.getFormAttribute("runtime"));
+        checker.accept(req, uploads);
         req.response().end();
       });
     });
     startServer();
-    MultipartForm form = MultipartForm.create()
-      .attribute("toolkit", "vert.x")
-      .attribute("runtime", "jvm")
-      .textFileUpload("file", testFile.getName(), testFile.getPath(), "text/plain");
+    for (int i = 0;i < testFiles.length;i++) {
+      form.textFileUpload(toUpload.get(i).name, toUpload.get(i).filename, testFiles[i].getPath(), "text/plain");
+    }
 
     HttpRequest<Buffer> builder = client.post("somepath");
+    builder.multipartMixed(multipartMixed);
     builder.sendMultipartForm(form, onSuccess(resp -> complete()));
     await();
   }
 
+  static class Upload {
+    final String name;
+    final String filename;
+    final Buffer data;
+    Upload(String name, String filename, Buffer data) {
+      this.name = name;
+      this.filename = filename;
+      this.data = data;
+    }
+  }
   @Test
   public void testFileUploadWhenFileDoesNotExist() {
+    HttpRequest<Buffer> builder = client.post("somepath");
+    MultipartForm form = MultipartForm.create()
+      .textFileUpload("file", "nonexistentFilename", "nonexistentPathname", "text/plain");
+
+    builder.sendMultipartForm(form, onFailure(err -> {
+      assertEquals(err.getClass(), HttpPostRequestEncoder.ErrorDataEncoderException.class);
+      complete();
+    }));
+    await();
+  }
+
+  @Test
+  public void testFileUploads() {
     HttpRequest<Buffer> builder = client.post("somepath");
     MultipartForm form = MultipartForm.create()
       .textFileUpload("file", "nonexistentFilename", "nonexistentPathname", "text/plain");
@@ -1119,11 +1439,47 @@ public class WebClientTest extends HttpTestBase {
       if (expect) {
         assertEquals(200, resp.statusCode());
         assertEquals("/ok", resp.body().toString());
+        assertEquals(1, resp.followedRedirects().size());
+        assertEquals(location, resp.followedRedirects().get(0));
       } else {
         assertEquals(301, resp.statusCode());
         assertEquals(location, resp.getHeader("location"));
       }
       complete();
+    }));
+    await();
+  }
+
+  @Test
+  public void testMultipleRedirect() throws Exception {
+    waitFor(2);
+    String middleRedirect = "http://" + DEFAULT_HTTP_HOST + ":" + DEFAULT_HTTP_PORT + "/middle";
+    String endRedirect = "http://" + DEFAULT_HTTP_HOST + ":" + DEFAULT_HTTP_PORT + "/ok";
+    server.requestHandler(req -> {
+      if (!req.headers().contains("foo", "bar", true)) {
+        fail("Missing expected header");
+        return;
+      }
+      if (req.path().equals("/redirect")) {
+        req.response().setStatusCode(301).putHeader("Location", middleRedirect).end();
+      } else if (req.path().equals("/middle")) {
+        req.response().setStatusCode(301).putHeader("Location", endRedirect).end();
+      } else {
+        req.response().end(req.path());
+        complete();
+      }
+    });
+    startServer();
+    client.get("/redirect")
+      .putHeader("foo", "bar")
+      .followRedirects(true)
+      .send(onSuccess(resp -> {
+        assertEquals(200, resp.statusCode());
+        assertEquals("/ok", resp.body().toString());
+        assertEquals(2, resp.followedRedirects().size());
+        assertEquals(middleRedirect, resp.followedRedirects().get(0));
+        assertEquals(endRedirect, resp.followedRedirects().get(1));
+        complete();
     }));
     await();
   }
@@ -1177,6 +1533,19 @@ public class WebClientTest extends HttpTestBase {
     });
     startServer();
     HttpRequest<Buffer> req = client.get("/test").virtualHost("another-host");
+    req.send(onSuccess(resp -> testComplete()));
+    await();
+  }
+
+  @Test
+  public void testSocketAddress() throws Exception {
+    server.requestHandler(req -> {
+      assertEquals("another-host:8080", req.host());
+      req.response().end();
+    });
+    startServer();
+    SocketAddress addr = SocketAddress.inetSocketAddress(8080, "localhost");
+    HttpRequest<Buffer> req = client.request(HttpMethod.GET, addr, 8080, "another-host", "/test");
     req.send(onSuccess(resp -> testComplete()));
     await();
   }
@@ -1532,4 +1901,23 @@ public class WebClientTest extends HttpTestBase {
     });
     await();
   }
+
+  @Test
+  public void testDontModifyRequestURIQueryParams() throws Exception {
+    testRequest(
+      client -> client.get("/remote-server?jREJBBB5x2AaiSSDO0/OskoCztDZBAAAAAADV1A4"),
+      req -> assertEquals("/remote-server?jREJBBB5x2AaiSSDO0/OskoCztDZBAAAAAADV1A4", req.uri())
+    );
+  }
+
+  @Test
+  public void testRawMethod() throws Exception {
+    testRequest(
+      client -> client.raw("MY_METHOD", "/"),
+      req -> {
+        assertEquals(HttpMethod.OTHER, req.method());
+        assertEquals("MY_METHOD", req.rawMethod());
+    });
+  }
+
 }

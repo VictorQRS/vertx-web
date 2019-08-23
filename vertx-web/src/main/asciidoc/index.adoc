@@ -20,7 +20,7 @@ You can use Vert.x-Web to create classic server-side web applications, RESTful w
 web applications, or any other kind of web application you can think of. Vert.x-Web doesn't care. It's up to you to chose
 the type of app you prefer, not Vert.x-Web.
 
-Vert.x-Web is a great fit for writingRESTful HTTP micro-services*, but we don'tforce* you to write apps like that.
+Vert.x-Web is a great fit for writing RESTful HTTP micro-services**, but we don't force** you to write apps like that.
 
 Some of the key features of Vert.x-Web include:
 
@@ -50,6 +50,7 @@ Some of the key features of Vert.x-Web include:
 ** Thymeleaf
 ** Apache FreeMarker
 ** Pebble
+** Rocker
 * Response time handler
 * Static file serving, including caching logic and directory listing.
 * Request timeout support
@@ -87,6 +88,20 @@ dependencies {
 }
 ----
 
+=== Development mode
+
+Vert.x Web by default operates in production mode.
+You can switch the development mode by assigning the `dev` value to either:
+
+* the `VERTXWEB_ENVIRONMENT` environment variable, or
+* the `vertxweb.environment` system property
+
+In development mode:
+
+* template engine caches are disabled
+* the `ErrorHandler` does not display exception details
+* the `StaticHandler` does not handle cache headers
+* the GraphiQL development tool is disabled
 
 == Re-cap on Vert.x core HTTP servers
 
@@ -292,7 +307,7 @@ Captures are denoted in regular expressions with capture groups (i.e. surroundin
 Using int index param names might be troublesome in some cases.
 It's possible to use named capture groups in the regex path.
 
-* [source,$lang]
+[source,$lang]
 ----
 {@link examples.WebExamples#example6_2}
 ----
@@ -391,6 +406,8 @@ If two matching routes have the same value of order, then they will be called in
 
 You can also specify that a route is handled last, with {@link io.vertx.ext.web.Route#last}
 
+Note: Route order can be specified only before you configure an handler!
+
 == Routing based on MIME type of request
 
 You can specify that a route will match against matching request MIME types using {@link io.vertx.ext.web.Route#consumes}.
@@ -487,6 +504,18 @@ In the above example, if you sent a request with the following `accept` header:
 
 Then the route would match and `acceptableContentType` would contain `text/html` as both are
 acceptable but that has a higher `q` value.
+
+== Routing based on VirtualHost
+
+You can configure that a `Route` will match against the request hostname.
+
+Request are checked against the `Host` header to a match and patterns allow the usage of `*` wildcards, as for
+example `*.vertx.io` or fully domain names as `www.vertx.io`.
+
+[source,$lang]
+----
+{@link examples.WebExamples#example56}
+----
 
 == Combining routing criteria
 
@@ -616,13 +645,17 @@ user understands, if you're only interested in the user prefered locale then the
 {@link io.vertx.ext.web.RoutingContext#preferredLocale} will return the 1st element of the list or `null` if no
 locale was provided by the user.
 
-== Default 404 Handling
+== Route match failures
 
-If no routes match for any particular request, Vert.x-Web will signal a 404 error.
+If no routes match for any particular request, Vert.x-Web will signal an error depending on match failure:
 
+* 404 If no route matches the path
+* 405 If a route matches the path but don't match the HTTP Method
+* 406 If a route matches the path and the method but It can't provide a response with a content type matching `Accept` header
+* 415 If a route matches the path and the method but It can't accept the `Content-type`
+* 400 If a route matches the path and the method but It can't accept an empty body
 
-A default 404 error handler is provided by Router. Anyway you can provide your own 404 error handler with
-{@link io.vertx.ext.web.Router#errorHandler}
+You can manually manage those failures using {@link io.vertx.ext.web.Router#errorHandler}
 
 == Error handling
 
@@ -675,6 +708,14 @@ to install handlers to consume the HTTP request body and this must be done befor
 {@link examples.WebExamples#example27}
 ----
 
+If an async call is required before, the `HttpServerRequest` should be paused and then resumed so that the request
+events are not delivered until the body handler is ready to process them.
+
+[source,$lang]
+----
+{@link examples.WebExamples#example27_1}
+----
+
 === Getting the request body
 
 If you know the request body is JSON, then you can use {@link io.vertx.ext.web.RoutingContext#getBodyAsJson},
@@ -718,19 +759,12 @@ such as the name, file-name and size to be accessed.
 
 == Handling cookies
 
-Vert.x-Web has cookies support using the {@link io.vertx.ext.web.handler.CookieHandler}.
-
-You should make sure a cookie handler is on a matching route for any requests that require this functionality.
-
-[source,$lang]
-----
-{@link examples.WebExamples#example29}
-----
+Vert.x-Web has out of the box cookies support.
 
 === Manipulating cookies
 
 You use {@link io.vertx.ext.web.RoutingContext#getCookie(String)} to retrieve
-a cookie by name, or use {@link io.vertx.ext.web.RoutingContext#cookies()} to retrieve the entire set.
+a cookie by name, or use {@link io.vertx.ext.web.RoutingContext#cookieMap()} to retrieve the entire set.
 
 To remove a cookie, use {@link io.vertx.ext.web.RoutingContext#removeCookie(String)}.
 
@@ -739,7 +773,7 @@ To add a cookie use {@link io.vertx.ext.web.RoutingContext#addCookie(Cookie)}.
 The set of cookies will be written back in the response automatically when the response headers are written so the
 browser can store them.
 
-Cookies are described by instances of {@link io.vertx.ext.web.Cookie}. This allows you to retrieve the name,
+Cookies are described by instances of {@link io.vertx.core.http.Cookie}. This allows you to retrieve the name,
 value, domain, path and other normal cookie properties.
 
 Here's an example of querying and adding cookies:
@@ -842,9 +876,6 @@ Here are some examples of creating a clustered {@link io.vertx.ext.web.sstore.Se
 
 Once you've created a session store you can create a session handler, and add it to a route. You should make sure
 your session handler is routed to before your application handlers.
-
-You'll also need to include a {@link io.vertx.ext.web.handler.CookieHandler} as the session handler uses cookies to
-lookup the session. The cookie handler should be before the session handler when routing.
 
 Here's an example:
 
@@ -981,7 +1012,7 @@ Here's an example of a simple app, using a redirect auth handler on the default 
 === JWT authorisation
 
 With JWT authorisation resources can be protected by means of permissions and users without enough rights are denied
-access.
+access. You need to add the `io.vertx:vertx-auth-jwt:${maven.version}` dependency to use `JWTAuthProvider`
 
 To use this handler there are 2 steps involved:
 
@@ -1204,8 +1235,8 @@ TODO more CORS docs
 Vert.x-Web includes dynamic page generation capabilities by including out of the box support for several popular template
 engines. You can also easily add your own.
 
-Template engines are described by {@link io.vertx.ext.web.templ.TemplateEngine}. In order to render a template
-{@link io.vertx.ext.web.templ.TemplateEngine#render} is used.
+Template engines are described by {@link io.vertx.ext.web.common.template.TemplateEngine}. In order to render a template
+{@link io.vertx.ext.web.common.template.TemplateEngine#render} is used.
 
 The simplest way to use templates is not to call the template engine directly but to use the
 {@link io.vertx.ext.web.handler.TemplateHandler}.
@@ -1302,7 +1333,7 @@ router.getWithRegex(".+\\.hbs").handler(handler.handle);
 
 To use MVEL, you need to add the following _dependency_ to your project:
 `${maven.groupId}:vertx-web-templ-mvel:${maven.version}`. Create an instance of the MVEL template engine using:
-`io.vertx.ext.web.templ.MVELTemplateEngine#create()`
+`io.vertx.ext.web.templ.mvel.MVELTemplateEngine#create(io.vertx.core.Vertx)`
 
 When using the MVEL template engine, it will by default look for
 templates with the `.templ` extension if no extension is specified in the file name.
@@ -1328,7 +1359,7 @@ MVEL templates.
 
 To use the Jade template engine, you need to add the following _dependency_ to your project:
 `${maven.groupId}:vertx-web-templ-jade:${maven.version}`. Create an instance of the Jade template engine using:
-`io.vertx.ext.web.templ.JadeTemplateEngine#create()`.
+`io.vertx.ext.web.templ.jade.JadeTemplateEngine#create(io.vertx.core.Vertx)`.
 
 When using the Jade template engine, it will by default look for
 templates with the `.jade` extension if no extension is specified in the file name.
@@ -1354,7 +1385,7 @@ Jade templates.
 
 To use Handlebars, you need to add the following _dependency_ to your project:
 `${maven.groupId}:vertx-web-templ-handlebars:${maven.version}`. Create an instance of the Handlebars template engine
-using: `io.vertx.ext.web.templ.HandlebarsTemplateEngine#create()`.
+using: `io.vertx.ext.web.templ.handlebars.HandlebarsTemplateEngine#create(io.vertx.core.Vertx)`.
 
 When using the Handlebars template engine, it will by default look for
 templates with the `.hbs` extension if no extension is specified in the file name.
@@ -1379,7 +1410,7 @@ handlebars templates.
 
 To use Thymeleaf, you need to add the following _dependency_ to your project:
 `${maven.groupId}:vertx-web-templ-thymeleaf:${maven.version}`. Create an instance of the Thymeleaf template engine
-using: `io.vertx.ext.web.templ.ThymeleafTemplateEngine#create()`.
+using: `io.vertx.ext.web.templ.thymeleaf.ThymeleafTemplateEngine#create(io.vertx.core.Vertx)`.
 
 When using the Thymeleaf template engine, it will by default look for
 templates with the `.html` extension if no extension is specified in the file name.
@@ -1435,7 +1466,7 @@ Apache FreeMarker templates.
 
 To use Pebble, you need to add the following _dependency_ to your project:
 `io.vertx:vertx-web-templ-pebble:${maven.version}`. Create an instance of the Pebble template engine
-using: `io.vertx.ext.web.templ.PebbleTemplateEngine#create(vertx)`.
+using: `io.vertx.ext.web.templ.pebble.PebbleTemplateEngine#create(vertx)`.
 
 When using the Pebble template engine, it will by default look for
 templates with the `.peb` extension if no extension is specified in the file name.
@@ -1459,12 +1490,46 @@ Here are some examples:
 Please consult the http://www.mitchellbosecke.com/pebble/home/[Pebble documentation] for how to write
 Pebble templates.
 
-=== Disabling caching
+=== Rocker template engine
+
+To use Rocker, then add `io.vertx:vertx-web-templ-rocker:${maven.version}` as a dependency to your project.
+You can then create a Rocker template engine instance with `io.vertx.ext.web.templ.rocker#create()`.
+
+The values of the JSON context object passed to the `render` method are then exposed as template parameters.
+Given:
+
+----
+[snip]
+final JsonObject context = new JsonObject()
+  .put("foo", "badger")
+  .put("bar", "fox")
+  .put("context", new JsonObject().put("path", "/foo/bar"));
+
+engine.render(context, "somedir/TestRockerTemplate2", render -> {
+  // (...)
+});
+[snip]
+----
+
+then the template can be as the following `somedir/TestRockerTemplate2.rocker.html` resource file:
+
+----
+@import io.vertx.core.json.JsonObject
+@args (JsonObject context, String foo, String bar)
+Hello @foo and @bar
+Request path is @context.getString("path")
+----
+
+=== Caching
+
+Many of the engines support caching of the compiled templates. The cache is stored inside a vert.x shared data local map
+which allows the engines to share the same cache across several verticles in a efficient and safe way.
+
+==== Disabling caching
 
 During development you might want to disable template caching so that the template gets reevaluated on each request.
-In order to do this you need to set the system property: `io.vertx.ext.web.TemplateEngine.disableCache` to `true`.
-
-By default it will be false. So caching is always enabled.
+In order to do this you need to set the system property: `vertxweb.environment` or environment variable
+`VERTXWEB_ENVIRONMENT` to `dev` or `development`. By default caching is always enabled.
 
 == Error handler
 
@@ -1477,7 +1542,7 @@ failure handler for any paths that you want covered.
 == Request logger
 
 Vert.x-Web includes a handler {@link io.vertx.ext.web.handler.LoggerHandler} that you can use to log HTTP requests.
-
+You should mount this handler before any handler that could fail the `RoutingContext`
 
 By default requests are logged to the Vert.x logger which can be configured to use JUL logging, log4j or SLF4J.
 
@@ -2022,19 +2087,6 @@ fetch('/process', {
 })
 ----
 
-== VirtualHost Handler
-
-The Virtual Host Handler will verify the request hostname and if it matches it will send the request to the
-registered handler, otherwise will continue inside the normal handlers chain.
-
-Request are checked against the `Host` header to a match and patterns allow the usage of `*` wildcards, as for
-example `*.vertx.io` or fully domain names as `www.vertx.io`.
-
-[source,$lang]
-----
-{@link examples.WebExamples#example56}
-----
-
 == OAuth2AuthHandler Handler
 
 The `OAuth2AuthHandler` allows quick setup of secure routes using the OAuth2 protocol. This handler simplifies the
@@ -2128,3 +2180,33 @@ This is handled automatically by the handler as long as the provider is configur
 
 In real life this means that your API's can access your protected resources using the header `Authorization` with the
 value `Bearer BASE64_ACCESS_TOKEN`.
+
+=== Handling HTTP Method overriding
+
+Many companies and other services impose limitations to the REST HTTP methods they allow to the outside world. Some are lax by allowing any method, most are restricted by allowing only a small-but-decent set and some only allow GET and POST. The reasons for such restritions varies: browser or client limitations or a really strict corporate firewalls. Web services with only GET and POST does not express well the REST ideology. PUT, DELETE, OPTIONS, among others are quite useful to specify what do to to a resource. To deal with it, it was created the X-HTTP-METHOD-OVERRIDE HTTP header as a workaround.
+
+By sending a request with GET/POST and which method the request should truly process inside the X-HTTP-METHOD-OVERRIDE HTTP header, the server should recognize the header and redirect to the appropriate method.
+
+Vert.x allows one to do so, simply by:
+
+[source,$lang]
+----
+{@link examples.WebExamples#example64}
+----
+
+Since it will redirect the request, it is wise to avoid firing request handlers unnecessarily, so it is better to add the MethodOverrideHandler as the first handler.
+
+Also, a word of caution: THIS MIGHT BECOME AN ATTACK VECTOR FOR ILL-INTENTIONED PEOPLE!
+
+To mitigate such a problem, the MethodOverrideHandler comes with a Safe-Downgrade Policy by default. This policy says that the method contained in X-HTTP-METHOD-OVERRIDE can override the original one if:
+
+* the overriding method is idempotent; or
+* the overriding method is safe and the method to be overrided is NOT idempotent; or
+* the method to be overrided is not safe.
+
+Although we do NOT recommend, Vert.x will not force you to anything. If it is your desire to allow any overriding, then:
+
+[source,$lang]
+----
+{@link examples.WebExamples#example65}
+----

@@ -2,6 +2,7 @@ package io.vertx.ext.web.codec.impl;
 
 import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.parsetools.JsonParser;
@@ -26,14 +27,25 @@ public class JsonStreamBodyCodec implements BodyCodec<Void> {
       }
 
       @Override
-      public WriteStream<Buffer> write(Buffer buffer) {
+      public Future<Void> write(Buffer buffer) {
         parser.handle(buffer);
-        return this;
+        return Future.succeededFuture();
       }
 
       @Override
-      public void end() {
+      public void write(Buffer data, Handler<AsyncResult<Void>> handler) {
+        parser.handle(data);
+        if (handler != null) {
+          handler.handle(Future.succeededFuture());
+        }
+      }
+
+      @Override
+      public void end(Handler<AsyncResult<Void>> handler) {
         parser.end();
+        if (handler != null) {
+          handler.handle(Future.succeededFuture());
+        }
       }
 
       @Override

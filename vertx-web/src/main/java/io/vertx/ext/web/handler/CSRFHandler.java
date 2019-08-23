@@ -3,6 +3,7 @@ package io.vertx.ext.web.handler;
 import io.vertx.codegen.annotations.Fluent;
 import io.vertx.codegen.annotations.VertxGen;
 import io.vertx.core.Handler;
+import io.vertx.core.Vertx;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.impl.CSRFHandlerImpl;
 
@@ -18,6 +19,8 @@ import io.vertx.ext.web.handler.impl.CSRFHandlerImpl;
  */
 @VertxGen
 public interface CSRFHandler extends Handler<RoutingContext> {
+
+  String ERROR_MESSAGE = "Invalid or missing csrf token";
 
   String DEFAULT_COOKIE_NAME = "XSRF-TOKEN";
 
@@ -36,8 +39,8 @@ public interface CSRFHandler extends Handler<RoutingContext> {
    *
    * @param secret server secret to sign the token.
    */
-  static CSRFHandler create(String secret) {
-    return new CSRFHandlerImpl(secret);
+  static CSRFHandler create(Vertx vertx, String secret) {
+    return new CSRFHandlerImpl(vertx, secret);
   }
 
   /**

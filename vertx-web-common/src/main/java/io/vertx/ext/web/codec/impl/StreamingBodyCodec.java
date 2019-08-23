@@ -18,8 +18,8 @@ package io.vertx.ext.web.codec.impl;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.file.AsyncFile;
 import io.vertx.core.streams.WriteStream;
 import io.vertx.ext.web.codec.BodyCodec;
 import io.vertx.ext.web.codec.spi.BodyStream;
@@ -30,25 +30,31 @@ import io.vertx.ext.web.codec.spi.BodyStream;
 public class StreamingBodyCodec implements BodyCodec<Void> {
 
   private final WriteStream<Buffer> stream;
+  private final boolean close;
 
   public StreamingBodyCodec(WriteStream<Buffer> stream) {
-    this.stream = stream;
+    this(stream, true);
+  }
+
+  public StreamingBodyCodec(WriteStream<Buffer> stream, boolean close) {
+	this.stream = stream;
+	this.close = close;
   }
 
   @Override
   public void create(Handler<AsyncResult<BodyStream<Void>>> handler) {
     handler.handle(Future.succeededFuture(new BodyStream<Void>() {
 
-      Future<Void> fut = Future.future();
+      Promise<Void> promise = Promise.promise();
 
       @Override
       public Future<Void> result() {
-        return fut;
+        return promise.future();
       }
 
       @Override
       public void handle(Throwable cause) {
-        fut.tryFail(cause);
+        promise.tryFail(cause);
       }
 
       @Override
@@ -58,25 +64,35 @@ public class StreamingBodyCodec implements BodyCodec<Void> {
       }
 
       @Override
-      public WriteStream<Buffer> write(Buffer data) {
-        stream.write(data);
-        return this;
+      public void write(Buffer data, Handler<AsyncResult<Void>> handler) {
+        stream.write(data, handler);
       }
 
       @Override
-      public void end() {
-        if (stream instanceof AsyncFile) {
-          AsyncFile file = (AsyncFile) stream;
-          file.close(ar -> {
+      public Future<Void> write(Buffer data) {
+        Promise<Void> promise = Promise.promise();
+        write(data, promise);
+        return promise.future();
+      }
+
+      @Override
+      public void end(Handler<AsyncResult<Void>> handler) {
+        if (close) {
+          stream.end(ar -> {
             if (ar.succeeded()) {
-              fut.tryComplete();
+              promise.tryComplete();
             } else {
-              fut.tryFail(ar.cause());
+              promise.tryFail(ar.cause());
+            }
+            if (handler != null) {
+              handler.handle(ar);
             }
           });
         } else {
-          stream.end();
-          fut.tryComplete();
+          promise.tryComplete();
+          if (handler != null) {
+            handler.handle(Future.succeededFuture());
+          }
         }
       }
 

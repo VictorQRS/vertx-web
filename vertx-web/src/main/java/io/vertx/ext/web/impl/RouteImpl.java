@@ -16,7 +16,6 @@
 
 package io.vertx.ext.web.impl;
 
-import io.netty.handler.codec.http.QueryStringDecoder;
 import io.vertx.core.Handler;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerRequest;
@@ -58,6 +57,8 @@ public class RouteImpl implements Route {
   private List<String> groups;
   private boolean useNormalisedPath = true;
   private Set<String> namedGroupsInRegex = new TreeSet<>();
+  private Pattern virtualHostPattern;
+  private boolean pathEndsWithSlash;
 
   RouteImpl(RouterImpl router, int order) {
     this.router = router;
@@ -120,6 +121,12 @@ public class RouteImpl implements Route {
   public synchronized Route consumes(String contentType) {
     ParsableMIMEValue value = new ParsableMIMEValue(contentType).forceParse();
     consumes.add(value);
+    return this;
+  }
+
+  @Override
+  public Route virtualHost(String hostnamePattern) {
+    this.virtualHostPattern = Pattern.compile("^" + hostnamePattern.replaceAll("\\.", "\\\\.").replaceAll("[*]", "(.*?)") + "$", Pattern.CASE_INSENSITIVE);
     return this;
   }
 
@@ -191,6 +198,11 @@ public class RouteImpl implements Route {
   }
 
   @Override
+  public Set<HttpMethod> methods() {
+    return this.methods;
+  }
+
+  @Override
   public Route setRegexGroupsNames(List<String> groups) {
     this.groups = groups;
     return this;
@@ -237,20 +249,20 @@ public class RouteImpl implements Route {
     failureHandler.handle(context);
   }
 
-  synchronized boolean matches(RoutingContextImplBase context, String mountPoint, boolean failure) {
+  /**
+   * @return 0 if route matches, otherwise it return the status code
+   */
+  synchronized int matches(RoutingContextImplBase context, String mountPoint, boolean failure) {
 
     if (failure && !hasNextFailureHandler(context) || !failure && !hasNextContextHandler(context)) {
-      return false;
+      return 404;
     }
     if (!enabled) {
-      return false;
+      return 404;
     }
     HttpServerRequest request = context.request();
-    if (!methods.isEmpty() && !methods.contains(request.method())) {
-      return false;
-    }
     if (path != null && pattern == null && !pathMatches(mountPoint, context)) {
-      return false;
+      return 404;
     }
     if (pattern != null) {
       String path = useNormalisedPath ? context.normalisedPath() : context.request().path();
@@ -302,17 +314,13 @@ public class RouteImpl implements Route {
           }
         }
       } else {
-        return false;
+        return 404;
       }
     }
 
-    // Check if query params are already parsed
-    if (context.queryParams().size() == 0) {
-      // Decode query parameters and put inside context.queryParams
-      Map<String, List<String>> decodedParams = new QueryStringDecoder(request.uri()).parameters();
-
-      for (Map.Entry<String, List<String>> entry : decodedParams.entrySet())
-        context.queryParams().add(entry.getKey(), entry.getValue());
+    if (!methods.isEmpty() && !methods.contains(request.method())) {
+      // If I'm here path or path pattern matches, but the method is wrong
+      return 405;
     }
 
     if (!consumes.isEmpty()) {
@@ -320,7 +328,11 @@ public class RouteImpl implements Route {
       MIMEHeader contentType = context.parsedHeaders().contentType();
       MIMEHeader consumal = contentType.findMatchedBy(consumes);
       if (consumal == null && !(contentType.rawValue().isEmpty() && emptyBodyPermittedWithConsumes)) {
-        return false;
+        if (contentType.rawValue().isEmpty()) {
+          return 400;
+        } else {
+          return 415;
+        }
       }
     }
     List<MIMEHeader> acceptableTypes = context.parsedHeaders().accept();
@@ -328,11 +340,12 @@ public class RouteImpl implements Route {
       MIMEHeader selectedAccept = context.parsedHeaders().findBestUserAcceptedIn(acceptableTypes, produces);
       if (selectedAccept != null) {
         context.setAcceptableContentType(selectedAccept.rawValue());
-        return true;
+        return 0;
       }
-      return false;
+      return 406;
     }
-    return true;
+    if (!virtualHostMatches(context.request.host())) return 404;
+    return 0;
   }
 
   private void addPathParam(RoutingContext context, String name, String value) {
@@ -366,25 +379,34 @@ public class RouteImpl implements Route {
     if (exactPath) {
       return pathMatchesExact(requestPath, thePath);
     } else {
-      if (thePath.endsWith("/") && requestPath.equals(removeTrailing(thePath))) {
+      if (pathEndsWithSlash && (requestPath.charAt(requestPath.length() - 1) == '/'
+          ? requestPath.equals(thePath) : thePath.regionMatches(0, requestPath, 0, requestPath.length()))) {
         return true;
       }
       return requestPath.startsWith(thePath);
     }
   }
 
-  private boolean pathMatchesExact(String path1, String path2) {
-    // Ignore trailing slash when matching paths
-    return removeTrailing(path1).equals(removeTrailing(path2));
+  private boolean virtualHostMatches(String host) {
+    if (virtualHostPattern == null) return true;
+    boolean match = false;
+    for (String h : host.split(":")) {
+      if (virtualHostPattern.matcher(h).matches()) {
+        match = true;
+        break;
+      }
+    }
+    return match;
   }
 
-  private String removeTrailing(String path) {
-    int i = path.length();
-    if (path.charAt(i - 1) == '/') {
-      path = path.substring(0, i - 1);
-    }
-    return path;
+  private boolean pathMatchesExact(String path1, String path2) {
+    // Ignore trailing slash when matching paths
+    final int idx1 = path1.length() - 1;
+    return pathEndsWithSlash ?
+       (path1.charAt(idx1) == '/' ? path1.equals(path2) : path2.regionMatches(0, path1, 0, path1.length()))
+      :(path1.charAt(idx1) != '/' ? path1.equals(path2) : path1.regionMatches(0, path2, 0, path2.length()));
   }
+
 
   private void setPath(String path) {
     // See if the path contains ":" - if so then it contains parameter capture groups and we have to generate
@@ -401,6 +423,7 @@ public class RouteImpl implements Route {
         this.path = path.substring(0, path.length() - 1);
       }
     }
+    pathEndsWithSlash = this.path.endsWith("/");
   }
 
   private void setRegex(String regex) {

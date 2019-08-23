@@ -18,13 +18,12 @@ package io.vertx.ext.web.handler.sockjs;
 
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.DeploymentOptions;
-import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.Promise;
 import io.vertx.core.http.HttpClient;
 import io.vertx.core.http.HttpClientOptions;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.ext.web.Router;
-import io.vertx.ext.web.handler.CookieHandler;
 import io.vertx.ext.web.handler.SessionHandler;
 import io.vertx.ext.web.sstore.LocalSessionStore;
 import io.vertx.test.core.VertxTestBase;
@@ -53,10 +52,9 @@ abstract class SockJSTestBase extends VertxTestBase {
     CountDownLatch latch = new CountDownLatch(1);
     vertx.deployVerticle(() -> new AbstractVerticle() {
       @Override
-      public void start(Future<Void> startFuture) throws Exception {
+      public void start(Promise<Void> startFuture) throws Exception {
 
         Router router = Router.router(vertx);
-        router.route().handler(CookieHandler.create());
         router.route()
           .handler(SessionHandler.create(LocalSessionStore.create(vertx))
             .setNagHttps(false)

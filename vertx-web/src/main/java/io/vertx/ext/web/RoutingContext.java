@@ -16,15 +16,12 @@
 
 package io.vertx.ext.web;
 
-import io.vertx.codegen.annotations.CacheReturn;
-import io.vertx.codegen.annotations.Fluent;
-import io.vertx.codegen.annotations.GenIgnore;
-import io.vertx.codegen.annotations.Nullable;
-import io.vertx.codegen.annotations.VertxGen;
+import io.vertx.codegen.annotations.*;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.http.Cookie;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpServerResponse;
@@ -186,8 +183,7 @@ public interface RoutingContext {
   String normalisedPath();
 
   /**
-   * Get the cookie with the specified name. The context must have first been routed to a {@link io.vertx.ext.web.handler.CookieHandler}
-   * for this to work.
+   * Get the cookie with the specified name.
    *
    * @param name  the cookie name
    * @return the cookie
@@ -195,18 +191,16 @@ public interface RoutingContext {
   @Nullable Cookie getCookie(String name);
 
   /**
-   * Add a cookie. This will be sent back to the client in the response. The context must have first been routed
-   * to a {@link io.vertx.ext.web.handler.CookieHandler} for this to work.
+   * Add a cookie. This will be sent back to the client in the response.
    *
    * @param cookie  the cookie
    * @return a reference to this, so the API can be used fluently
    */
   @Fluent
-  RoutingContext addCookie(Cookie cookie);
+  RoutingContext addCookie(io.vertx.core.http.Cookie cookie);
 
   /**
-   * Expire a cookie, notifying a User Agent to remove it from its cookie jar. The context must have first been routed
-   * to a {@link io.vertx.ext.web.handler.CookieHandler} for this to work.
+   * Expire a cookie, notifying a User Agent to remove it from its cookie jar.
    *
    * @param name  the name of the cookie
    * @return the cookie, if it existed, or null
@@ -217,8 +211,7 @@ public interface RoutingContext {
 
   /**
    * Remove a cookie from the cookie set. If invalidate is true then it will expire a cookie, notifying a User Agent to
-   * remove it from its cookie jar. The context must have first been routed to a
-   * {@link io.vertx.ext.web.handler.CookieHandler} for this to work.
+   * remove it from its cookie jar.
    *
    * @param name  the name of the cookie
    * @return the cookie, if it existed, or null
@@ -226,16 +219,14 @@ public interface RoutingContext {
   @Nullable Cookie removeCookie(String name, boolean invalidate);
 
   /**
-   * @return the number of cookies. The context must have first been routed to a {@link io.vertx.ext.web.handler.CookieHandler}
-   * for this to work.
+   * @return the number of cookies.
    */
   int cookieCount();
 
   /**
-   * @return a set of all the cookies. The context must have first been routed to a {@link io.vertx.ext.web.handler.CookieHandler}
-   * for this to be populated.
+   * @return a map of all the cookies.
    */
-  Set<Cookie> cookies();
+  Map<String, io.vertx.core.http.Cookie> cookieMap();
 
   /**
    * @return  the entire HTTP request body as a string, assuming UTF-8 encoding. The context must have first been routed to a
@@ -255,12 +246,16 @@ public interface RoutingContext {
   /**
    * @return Get the entire HTTP request body as a {@link JsonObject}. The context must have first been routed to a
    * {@link io.vertx.ext.web.handler.BodyHandler} for this to be populated.
+   * <br/>
+   * When the body is {@code null} or the {@code "null"} JSON literal then {@code null} is returned.
    */
   @Nullable JsonObject getBodyAsJson();
 
   /**
    * @return Get the entire HTTP request body as a {@link JsonArray}. The context must have first been routed to a
    * {@link io.vertx.ext.web.handler.BodyHandler} for this to be populated.
+   * <br/>
+   * When the body is {@code null} or the {@code "null"} JSON literal then {@code null} is returned.
    */
   @Nullable JsonArray getBodyAsJsonArray();
 
@@ -501,18 +496,19 @@ public interface RoutingContext {
   String pathParam(String name);
 
   /**
-   * Returns a map of all query parameters inside the <a href="https://en.wikipedia.org/wiki/Query_string">query string</a>
+   * Returns a map of all query parameters inside the <a href="https://en.wikipedia.org/wiki/Query_string">query string</a><br/>
+   * The query parameters are lazily decoded: the decoding happens on the first time this method is called. If the query string is invalid
+   * it fails the context
    *
    * @return the multimap of query parameters
    */
   MultiMap queryParams();
 
   /**
-   * Gets the value of a single query parameter
+   * Gets the value of a single query parameter. For more info {@link RoutingContext#queryParams()}
    *
-   * @param query The name of query parameter
-   * @return The list of all elements inside query parameter
+   * @param name The name of query parameter
+   * @return The list of all parameters matching the parameter name. It returns an empty list if no query parameter with {@code name} was found
    */
-  @Nullable
-  List<String> queryParam(String query);
+  List<String> queryParam(String name);
 }

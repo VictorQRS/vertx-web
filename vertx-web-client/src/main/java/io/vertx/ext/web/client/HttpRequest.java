@@ -18,9 +18,7 @@ package io.vertx.ext.web.client;
 import io.vertx.codegen.annotations.CacheReturn;
 import io.vertx.codegen.annotations.Fluent;
 import io.vertx.codegen.annotations.VertxGen;
-import io.vertx.core.AsyncResult;
-import io.vertx.core.Handler;
-import io.vertx.core.MultiMap;
+import io.vertx.core.*;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.json.JsonObject;
@@ -77,6 +75,14 @@ public interface HttpRequest<T> {
   HttpRequest<T> method(HttpMethod value);
 
   /**
+   * Configure the request to use a custom HTTP method
+   *
+   * @return a reference to this, so the API can be used fluently
+   */
+  @Fluent
+  HttpRequest<T> rawMethod(String method);
+
+  /**
    * Configure the request to use a new port {@code value}.
    *
    * @return a reference to this, so the API can be used fluently
@@ -127,6 +133,15 @@ public interface HttpRequest<T> {
    */
   @Fluent
   HttpRequest<T> uri(String value);
+
+  /**
+   * Configure the request to add multiple HTTP headers .
+   *
+   * @param headers The HTTP headers
+   * @return a reference to this, so the API can be used fluently
+   */
+  @Fluent
+  HttpRequest<T> putHeaders(MultiMap headers);
 
   /**
    * Configure the request to add a new HTTP header.
@@ -186,7 +201,7 @@ public interface HttpRequest<T> {
   HttpRequest<T> bearerTokenAuthentication(String bearerToken);
 
   @Fluent
-  HttpRequest<T> ssl(boolean value);
+  HttpRequest<T> ssl(Boolean value);
 
   /**
    * Configures the amount of time in milliseconds after which if the request does not return any data within the timeout
@@ -268,6 +283,19 @@ public interface HttpRequest<T> {
   HttpRequest<T> copy();
 
   /**
+   * Allow or disallow multipart mixed encoding when sending {@link MultipartForm} having files sharing the same
+   * file name.
+   * <br/>
+   * The default value is {@code true}.
+   * <br/>
+   * Set to {@code false} if you want to achieve the behavior for <a href="http://www.w3.org/TR/html5/forms.html#multipart-form-data">HTML5</a>.
+   *
+   * @param allow {@code true} allows use of multipart mixed encoding
+   * @return a reference to this, so the API can be used fluently
+   */
+  HttpRequest<T> multipartMixed(boolean allow);
+
+  /**
    * Like {@link #send(Handler)} but with an HTTP request {@code body} stream.
    *
    * @param body the body
@@ -275,11 +303,31 @@ public interface HttpRequest<T> {
   void sendStream(ReadStream<Buffer> body, Handler<AsyncResult<HttpResponse<T>>> handler);
 
   /**
+   * @see HttpRequest#sendStream(ReadStream, Handler)
+   * @param body the body
+   */
+  default Future<HttpResponse<T>> sendStream(ReadStream<Buffer> body) {
+    Promise<HttpResponse<T>> promise = Promise.promise();
+    sendStream(body, promise);
+    return promise.future();
+  }
+
+  /**
    * Like {@link #send(Handler)} but with an HTTP request {@code body} buffer.
    *
    * @param body the body
    */
   void sendBuffer(Buffer body, Handler<AsyncResult<HttpResponse<T>>> handler);
+
+  /**
+   * @see HttpRequest#sendBuffer(Buffer, Handler)
+   * @param body the body
+   */
+  default Future<HttpResponse<T>> sendBuffer(Buffer body) {
+    Promise<HttpResponse<T>> promise = Promise.promise();
+    sendBuffer(body, promise);
+    return promise.future();
+  }
 
   /**
    * Like {@link #send(Handler)} but with an HTTP request {@code body} object encoded as json and the content type
@@ -290,12 +338,32 @@ public interface HttpRequest<T> {
   void sendJsonObject(JsonObject body, Handler<AsyncResult<HttpResponse<T>>> handler);
 
   /**
+   * @see HttpRequest#sendJsonObject(JsonObject, Handler)
+   * @param body the body
+   */
+  default Future<HttpResponse<T>> sendJsonObject(JsonObject body) {
+    Promise<HttpResponse<T>> promise = Promise.promise();
+    sendJsonObject(body, promise);
+    return promise.future();
+  }
+
+  /**
    * Like {@link #send(Handler)} but with an HTTP request {@code body} object encoded as json and the content type
    * set to {@code application/json}.
    *
    * @param body the body
    */
   void sendJson(Object body, Handler<AsyncResult<HttpResponse<T>>> handler);
+
+  /**
+   * @see HttpRequest#sendJson(Object, Handler)
+   * @param body the body
+   */
+  default Future<HttpResponse<T>> sendJson(Object body) {
+    Promise<HttpResponse<T>> promise = Promise.promise();
+    sendJson(body, promise);
+    return promise.future();
+  }
 
   /**
    * Like {@link #send(Handler)} but with an HTTP request {@code body} multimap encoded as form and the content type
@@ -308,6 +376,16 @@ public interface HttpRequest<T> {
   void sendForm(MultiMap body, Handler<AsyncResult<HttpResponse<T>>> handler);
 
   /**
+   * @see HttpRequest#sendForm(MultiMap, Handler)
+   * @param body the body
+   */
+  default Future<HttpResponse<T>> sendForm(MultiMap body) {
+    Promise<HttpResponse<T>> promise = Promise.promise();
+    sendForm(body, promise);
+    return promise.future();
+  }
+
+  /**
    * Like {@link #send(Handler)} but with an HTTP request {@code body} multimap encoded as form and the content type
    * set to {@code multipart/form-data}. You may use this method to send attributes and upload files.
    *
@@ -316,8 +394,26 @@ public interface HttpRequest<T> {
   void sendMultipartForm(MultipartForm body, Handler<AsyncResult<HttpResponse<T>>> handler);
 
   /**
+   * @see HttpRequest#sendMultipartForm(MultipartForm, Handler)
+   * @param body the body
+   */
+  default Future<HttpResponse<T>> sendMultipartForm(MultipartForm body) {
+    Promise<HttpResponse<T>> promise = Promise.promise();
+    sendMultipartForm(body, promise);
+    return promise.future();
+  }
+
+  /**
    * Send a request, the {@code handler} will receive the response as an {@link HttpResponse}.
    */
   void send(Handler<AsyncResult<HttpResponse<T>>> handler);
 
+  /**
+   * @see HttpRequest#send(Handler)
+   */
+  default Future<HttpResponse<T>> send() {
+    Promise<HttpResponse<T>> promise = Promise.promise();
+    send(promise);
+    return promise.future();
+  }
 }

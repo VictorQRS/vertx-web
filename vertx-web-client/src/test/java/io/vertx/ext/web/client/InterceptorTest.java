@@ -308,6 +308,11 @@ public class InterceptorTest extends HttpTestBase {
     }
 
     @Override
+    public List<String> followedRedirects() {
+      return null;
+    }
+
+    @Override
     public JsonArray bodyAsJsonArray() {
       return null;
     }
@@ -347,6 +352,7 @@ public class InterceptorTest extends HttpTestBase {
       assertEquals(Arrays.asList(
         ClientPhase.PREPARE_REQUEST,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
         ClientPhase.RECEIVE_RESPONSE,
         ClientPhase.DISPATCH_RESPONSE), phases);
@@ -375,21 +381,37 @@ public class InterceptorTest extends HttpTestBase {
       assertEquals(Arrays.asList(
         ClientPhase.PREPARE_REQUEST,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
+        ClientPhase.FOLLOW_REDIRECT,
         ClientPhase.SEND_REQUEST,
         ClientPhase.RECEIVE_RESPONSE,
         ClientPhase.DISPATCH_RESPONSE

@@ -1,5 +1,6 @@
 package io.vertx.ext.web.api.contract.openapi3;
 
+import io.netty.handler.codec.http.HttpResponseStatus;
 import io.swagger.v3.oas.models.Operation;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
@@ -16,13 +17,18 @@ import io.vertx.ext.web.api.contract.RouterFactoryOptions;
 import io.vertx.ext.web.api.validation.ValidationException;
 import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.ext.web.handler.StaticHandler;
-import org.apache.http.HttpStatus;
+import io.vertx.ext.web.multipart.MultipartForm;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -36,6 +42,8 @@ public class OpenAPI3RouterFactoryTest extends ApiWebTestBase {
   private OpenAPI3RouterFactory routerFactory;
   private HttpServer fileServer;
   private HttpServer securedFileServer;
+
+  @Rule public TemporaryFolder tempFolder = new TemporaryFolder();
 
   private Handler<RoutingContext> generateFailureHandler(boolean expected) {
     return routingContext -> {
@@ -74,7 +82,7 @@ public class OpenAPI3RouterFactoryTest extends ApiWebTestBase {
     Router router = Router.router(vertx);
     router.route()
       .handler((RoutingContext ctx) -> {
-        if (ctx.request().getHeader("Authorization") == null) ctx.fail(HttpStatus.SC_FORBIDDEN);
+        if (ctx.request().getHeader("Authorization") == null) ctx.fail(403);
         else ctx.next();
       })
       .handler(StaticHandler.create("src/test/resources"));
@@ -597,6 +605,8 @@ public class OpenAPI3RouterFactoryTest extends ApiWebTestBase {
             .setMountNotImplementedHandler(true)
         );
 
+        routerFactory.addHandlerByOperationId("showPetById", RoutingContext::next);
+
         latch.countDown();
       });
     awaitLatch(latch);
@@ -604,6 +614,37 @@ public class OpenAPI3RouterFactoryTest extends ApiWebTestBase {
     startServer();
 
     testRequest(HttpMethod.GET, "/pets", 501, "Not Implemented");
+  }
+
+
+
+  @Test
+  public void mountNotAllowedHandler() throws Exception {
+    CountDownLatch latch = new CountDownLatch(1);
+    OpenAPI3RouterFactory.create(this.vertx, "src/test/resources/swaggers/router_factory_test.yaml",
+      openAPI3RouterFactoryAsyncResult -> {
+        routerFactory = openAPI3RouterFactoryAsyncResult.result();
+        routerFactory.setOptions(
+          new RouterFactoryOptions()
+            .setRequireSecurityHandlers(false)
+            .setMountNotImplementedHandler(true)
+        );
+
+        routerFactory.addHandlerByOperationId("deletePets", RoutingContext::next);
+        routerFactory.addHandlerByOperationId("createPets", RoutingContext::next);
+
+        latch.countDown();
+      });
+    awaitLatch(latch);
+
+    startServer();
+
+    testRequest(HttpMethod.GET, "/pets", null, resp -> {
+      assertTrue(
+        Stream.of("DELETE", "POST").collect(Collectors.toSet())
+          .equals(new HashSet<>(Arrays.asList(resp.getHeader("Allow").split(Pattern.quote(", ")))))
+      );
+    }, 405, "Method Not Allowed", null);
   }
 
   @Test
@@ -723,6 +764,7 @@ public class OpenAPI3RouterFactoryTest extends ApiWebTestBase {
       openAPI3RouterFactoryAsyncResult -> {
         routerFactory = openAPI3RouterFactoryAsyncResult.result();
         routerFactory.setOptions(new RouterFactoryOptions().setMountNotImplementedHandler(false));
+        routerFactory.setBodyHandler(BodyHandler.create(tempFolder.getRoot().getAbsolutePath()));
 
         routerFactory.addHandlerByOperationId("consumesTest", routingContext -> {
           RequestParameters params = routingContext.get("parsedParameters");
@@ -756,7 +798,7 @@ public class OpenAPI3RouterFactoryTest extends ApiWebTestBase {
     MultiMap form = MultiMap.caseInsensitiveMultiMap();
     form.add("name", "francesco");
     testRequestWithForm(HttpMethod.POST, "/consumesTest", FormType.FORM_URLENCODED, form, 200, "OK");
-    testRequestWithForm(HttpMethod.POST, "/consumesTest", FormType.MULTIPART, form, 404, "Not Found");
+    testRequestWithForm(HttpMethod.POST, "/consumesTest", FormType.MULTIPART, form, 415, HttpResponseStatus.UNSUPPORTED_MEDIA_TYPE.reasonPhrase());
   }
 
   @Test
@@ -888,6 +930,100 @@ public class OpenAPI3RouterFactoryTest extends ApiWebTestBase {
     } finally {
       Paths.get("./my-uploads").toFile().deleteOnExit();
     }
+  }
+
+  @Test
+  public void commaSeparatedMultipartEncoding() throws Exception {
+    CountDownLatch latch = new CountDownLatch(1);
+    OpenAPI3RouterFactory.create(this.vertx, "src/test/resources/swaggers/multipart.yaml",
+      openAPI3RouterFactoryAsyncResult -> {
+        if (openAPI3RouterFactoryAsyncResult.succeeded()) {
+          routerFactory = openAPI3RouterFactoryAsyncResult.result();
+          routerFactory.setBodyHandler(BodyHandler.create(tempFolder.getRoot().getAbsolutePath()));
+          routerFactory.setOptions(new RouterFactoryOptions().setRequireSecurityHandlers(false));
+          routerFactory.addHandlerByOperationId("testMultipartMultiple", (ctx) -> {
+            RequestParameters params = ctx.get("parsedParameters");
+            ctx.response().setStatusCode(200).setStatusMessage(params.formParameter("type").getString()).end();
+          });
+          latch.countDown();
+        } else {
+          fail(openAPI3RouterFactoryAsyncResult.cause());
+        }
+      });
+    awaitLatch(latch);
+
+    startServer();
+
+    MultipartForm form1 =
+      MultipartForm
+        .create()
+        .binaryFileUpload("file1", "random-file", "src/test/resources/random-file", "application/octet-stream")
+        .attribute("type", "application/octet-stream");
+
+    testRequestWithMultipartForm(HttpMethod.POST, "/testMultipartMultiple", form1, 200, "application/octet-stream");
+
+    MultipartForm form2 =
+      MultipartForm
+        .create()
+        .binaryFileUpload("file1", "random.txt", "src/test/resources/random.txt", "text/plain")
+        .attribute("type", "text/plain");
+
+    testRequestWithMultipartForm(HttpMethod.POST, "/testMultipartMultiple", form2, 200, "text/plain");
+
+    MultipartForm form3 =
+      MultipartForm
+        .create()
+        .binaryFileUpload("file1", "random.txt", "src/test/resources/random.txt", "application/json")
+        .attribute("type", "application/json");
+
+    testRequestWithMultipartForm(HttpMethod.POST, "/testMultipartMultiple", form3, 400, "Bad Request");
+  }
+
+  @Test
+  public void wildcardMultipartEncoding() throws Exception {
+    CountDownLatch latch = new CountDownLatch(1);
+    OpenAPI3RouterFactory.create(this.vertx, "src/test/resources/swaggers/multipart.yaml",
+      openAPI3RouterFactoryAsyncResult -> {
+        if (openAPI3RouterFactoryAsyncResult.succeeded()) {
+          routerFactory = openAPI3RouterFactoryAsyncResult.result();
+          routerFactory.setOptions(new RouterFactoryOptions().setRequireSecurityHandlers(false));
+          routerFactory.setBodyHandler(BodyHandler.create(tempFolder.getRoot().getAbsolutePath()));
+          routerFactory.addHandlerByOperationId("testMultipartWildcard", (ctx) -> {
+            RequestParameters params = ctx.get("parsedParameters");
+            ctx.response().setStatusCode(200).setStatusMessage(params.formParameter("type").getString()).end();
+          });
+          latch.countDown();
+        } else {
+          fail(openAPI3RouterFactoryAsyncResult.cause());
+        }
+      });
+    awaitLatch(latch);
+
+    startServer();
+
+    MultipartForm form1 =
+      MultipartForm
+        .create()
+        .binaryFileUpload("file1", "random.txt", "src/test/resources/random.txt", "text/plain")
+        .attribute("type", "text/plain");
+
+    testRequestWithMultipartForm(HttpMethod.POST, "/testMultipartWildcard", form1, 200, "text/plain");
+
+    MultipartForm form2 =
+      MultipartForm
+        .create()
+        .binaryFileUpload("file1", "random.csv", "src/test/resources/random.csv", "text/csv")
+        .attribute("type", "text/csv");
+
+    testRequestWithMultipartForm(HttpMethod.POST, "/testMultipartWildcard", form2, 200, "text/csv");
+
+    MultipartForm form3 =
+      MultipartForm
+        .create()
+        .binaryFileUpload("file1", "random.txt", "src/test/resources/random.txt", "application/json")
+        .attribute("type", "application/json");
+
+    testRequestWithMultipartForm(HttpMethod.POST, "/testMultipartWildcard", form3, 400, "Bad Request");
   }
 
   @Test

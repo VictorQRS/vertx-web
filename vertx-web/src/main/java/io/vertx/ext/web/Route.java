@@ -23,6 +23,7 @@ import io.vertx.core.Handler;
 import io.vertx.core.http.HttpMethod;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * A route is a holder for a set of criteria which determine whether an HTTP request or failure should be routed
@@ -80,6 +81,15 @@ public interface Route {
    */
   @Fluent
   Route consumes(String contentType);
+
+  /**
+   * Add a virtual host filter for this route.
+   *
+   * @param hostnamePattern the hostname pattern that should match {@code Host} header of the requests
+   * @return a reference to this, so the API can be used fluently
+   */
+  @Fluent
+  Route virtualHost(String hostnamePattern);
 
   /**
    * Specify the order for this route. The router tests routes in that order.
@@ -183,6 +193,11 @@ public interface Route {
    */
   @Nullable
   String getPath();
+
+  /**
+   * @return the http methods accepted by this route
+   */
+  Set<HttpMethod> methods();
 
   /**
    * When you add a new route with a regular expression, you can add named capture groups for parameters. <br/>

@@ -17,32 +17,32 @@
 package io.vertx.ext.web.impl;
 
 import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.QueryStringDecoder;
 import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.http.Cookie;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.http.impl.HttpUtils;
+import io.vertx.core.http.impl.ServerCookie;
+import io.vertx.core.json.DecodeException;
+import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.auth.User;
-import io.vertx.ext.web.Cookie;
-import io.vertx.ext.web.FileUpload;
 import io.vertx.ext.web.Locale;
-import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.Session;
+import io.vertx.ext.web.*;
+import io.vertx.ext.web.codec.BodyCodec;
+import io.vertx.ext.web.codec.impl.BodyCodecImpl;
+import io.vertx.ext.web.handler.impl.HttpStatusException;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.TreeMap;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 /**
  * @author <a href="http://tfox.org">Tim Fox</a>
@@ -142,19 +142,18 @@ public class RoutingContextImpl extends RoutingContextImplBase {
       // Send back FAILURE
       unhandledFailure(statusCode, failure, router);
     } else {
-      Handler<RoutingContext> handler = router.getErrorHandlerByStatusCode(404);
+      Handler<RoutingContext> handler = router.getErrorHandlerByStatusCode(this.matchFailure);
+      this.statusCode = this.matchFailure;
       if (handler == null) { // Default 404 handling
-        // Send back default 404
-        this.response()
-          .setStatusMessage("Not Found")
-          .setStatusCode(404);
-        if (this.request().method() == HttpMethod.HEAD) {
-          // HEAD responses don't have a body
-          this.response().end();
-        } else {
+        // Send back empty default response with status code
+        this.response().setStatusCode(matchFailure);
+        if (this.request().method() != HttpMethod.HEAD && matchFailure == 404) {
+          // If it's a 404 let's send a body too
           this.response()
             .putHeader(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=utf-8")
             .end("<html><body><h1>Resource not found</h1></body></html>");
+        } else {
+          this.response().end();
         }
       } else
         handler.handle(this);
@@ -224,40 +223,28 @@ public class RoutingContextImpl extends RoutingContextImplBase {
 
   @Override
   public Cookie getCookie(String name) {
-    return cookiesMap().get(name);
+    return request.getCookie(name);
   }
 
   @Override
-  public RoutingContext addCookie(Cookie cookie) {
-    cookiesMap().put(cookie.getName(), cookie);
+  public RoutingContext addCookie(io.vertx.core.http.Cookie cookie) {
+    request.response().addCookie(cookie);
     return this;
   }
 
   @Override
   public Cookie removeCookie(String name, boolean invalidate) {
-    Cookie cookie = cookiesMap().get(name);
-    if (cookie != null) {
-      if (invalidate && cookie.isFromUserAgent()) {
-        // in the case the cookie was passed from the User Agent
-        // we need to expire it and sent it back to it can be
-        // invalidated
-        cookie.setMaxAge(0L);
-      } else {
-        // this was a temporary cookie so we can safely remove it
-        cookiesMap().remove(name);
-      }
-    }
-    return cookie;
+    return request.response().removeCookie(name, invalidate);
   }
 
   @Override
   public int cookieCount() {
-    return cookiesMap().size();
+    return request.cookieCount();
   }
 
   @Override
-  public Set<Cookie> cookies() {
-    return new HashSet<>(cookiesMap().values());
+  public Map<String, Cookie> cookieMap() {
+    return request.cookieMap();
   }
 
   @Override
@@ -272,14 +259,18 @@ public class RoutingContextImpl extends RoutingContextImplBase {
 
   @Override
   public JsonObject getBodyAsJson() {
-    // the minimal json is {} so we need at least 2 chars
-    return body != null && body.length() > 1 ? new JsonObject(body) : null;
+    if (body != null) {
+      return BodyCodecImpl.JSON_OBJECT_DECODER.apply(body);
+    }
+    return null;
   }
 
   @Override
   public JsonArray getBodyAsJsonArray() {
-    // the minimal array is [] so we need at least 2 chars
-    return body != null && body.length() > 1 ? new JsonArray(body) : null;
+    if (body != null) {
+      return BodyCodecImpl.JSON_ARRAY_DECODER.apply(body);
+    }
+    return null;
   }
 
   @Override
@@ -434,8 +425,18 @@ public class RoutingContextImpl extends RoutingContextImplBase {
   }
 
   private MultiMap getQueryParams() {
+    // Check if query params are already parsed
     if (queryParams == null) {
-      queryParams = MultiMap.caseInsensitiveMultiMap();
+      try {
+        queryParams = MultiMap.caseInsensitiveMultiMap();
+
+        // Decode query parameters and put inside context.queryParams
+        Map<String, List<String>> decodedParams = new QueryStringDecoder(request.uri()).parameters();
+        for (Map.Entry<String, List<String>> entry : decodedParams.entrySet())
+          queryParams.add(entry.getKey(), entry.getValue());
+      } catch (IllegalArgumentException e) {
+        throw new HttpStatusException(400, "Error while decoding query params", e);
+      }
     }
     return queryParams;
   }
@@ -463,13 +464,6 @@ public class RoutingContextImpl extends RoutingContextImplBase {
       response().bodyEndHandler(v -> bodyEndHandlers.values().forEach(handler -> handler.handle(null)));
     }
     return bodyEndHandlers;
-  }
-
-  private Map<String, Cookie> cookiesMap() {
-    if (cookies == null) {
-      cookies = new HashMap<>();
-    }
-    return cookies;
   }
 
   private Set<FileUpload> getFileUploads() {

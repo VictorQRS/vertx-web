@@ -32,8 +32,6 @@ import java.text.DateFormat;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * @author <a href="http://tfox.org">Tim Fox</a>
@@ -202,7 +200,7 @@ public class StaticHandlerTest extends WebTestBase {
       resp.bodyHandler(this::assertNotNull);
       testComplete();
     }));
-    request.pushHandler(pushedReq -> pushedReq.handler(pushedResp -> {
+    request.pushHandler(pushedReq -> pushedReq.setHandler(pushedResp -> {
       fail();
     }));
     request.end();
@@ -235,7 +233,7 @@ public class StaticHandlerTest extends WebTestBase {
       resp.bodyHandler(this::assertNotNull);
     }));
     CountDownLatch latch = new CountDownLatch(2);
-    request.pushHandler(pushedReq -> pushedReq.handler(onSuccess(pushedResp -> {
+    request.pushHandler(pushedReq -> pushedReq.setHandler(onSuccess(pushedResp -> {
       assertNotNull(pushedResp);
       pushedResp.bodyHandler(this::assertNotNull);
       latch.countDown();
@@ -266,7 +264,7 @@ public class StaticHandlerTest extends WebTestBase {
 
   private void testSkipCompression(StaticHandler staticHandler, List<String> uris, List<String> expectedContentEncodings) throws Exception {
     server.close();
-    server = vertx.createHttpServer(getHttpServerOptions().setCompressionSupported(true));
+    server = vertx.createHttpServer(getHttpServerOptions().setPort(0).setCompressionSupported(true));
     router = Router.router(vertx);
     router.route().handler(staticHandler);
 
@@ -277,7 +275,7 @@ public class StaticHandlerTest extends WebTestBase {
     List<String> contentEncodings = Collections.synchronizedList(new ArrayList<>());
     for (String uri : uris) {
       CountDownLatch responseReceived = new CountDownLatch(1);
-      client.get(uri, onSuccess(resp -> {
+      client.get(server.actualPort(), getHttpClientOptions().getDefaultHost(), uri, onSuccess(resp -> {
         assertEquals(200, resp.statusCode());
         contentEncodings.add(resp.getHeader(HttpHeaders.CONTENT_ENCODING));
         responseReceived.countDown();
@@ -841,6 +839,19 @@ public class StaticHandlerTest extends WebTestBase {
   public void testHandlerAfter() throws Exception {
     router.get().handler(ctx -> ctx.response().end("Howdy!"));
     testRequest(HttpMethod.GET, "/not-existing-file.html", 200, "OK", "Howdy!");
+  }
+
+  @Test
+  public void testWriteResponseWhenAlreadyClosed() throws Exception {
+    router.clear();
+    router
+      .route()
+      .handler(rc -> {
+        rc.next();
+        rc.response().end("OtherResponse");
+      })
+      .handler(stat);
+    testRequest(HttpMethod.GET, "/index.html", 200, "OK", "OtherResponse");
   }
 
 

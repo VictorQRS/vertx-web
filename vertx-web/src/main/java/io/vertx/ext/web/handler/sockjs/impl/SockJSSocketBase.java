@@ -32,7 +32,10 @@
 
 package io.vertx.ext.web.handler.sockjs.impl;
 
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.eventbus.Message;
@@ -78,13 +81,20 @@ public abstract class SockJSSocketBase implements SockJSSocket {
   }
 
   @Override
-  public void end() {
-    close();
+  public Future<Void> end() {
+    Promise<Void> promise = Promise.promise();
+    registration.unregister(promise);
+    return promise.future();
+  }
+
+  @Override
+  public void end(Handler<AsyncResult<Void>> handler) {
+    registration.unregister(handler);
   }
 
   @Override
   public void close() {
-    registration.unregister();
+    end();
   }
 
   // Only websocket transport allows status code and reason, so in other cases we simply call close()

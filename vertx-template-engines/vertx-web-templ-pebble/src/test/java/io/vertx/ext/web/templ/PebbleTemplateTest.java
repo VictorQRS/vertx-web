@@ -20,11 +20,11 @@ import com.mitchellbosecke.pebble.PebbleEngine;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.file.FileSystemOptions;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.unit.Async;
 import io.vertx.ext.unit.TestContext;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
-import io.vertx.ext.web.common.template.CachingTemplateEngine;
 import io.vertx.ext.web.common.template.TemplateEngine;
 import io.vertx.ext.web.templ.extension.TestExtension;
 import io.vertx.ext.web.templ.pebble.impl.PebbleVertxLoader;
@@ -37,6 +37,8 @@ import org.junit.runner.RunWith;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Locale;
 
 /**
@@ -89,6 +91,37 @@ public class PebbleTemplateTest {
   }
 
   @Test
+  public void testRenderJsonArrayAndJavaObjects(TestContext should) {
+    final Async test = should.async();
+    TemplateEngine engine = PebbleTemplateEngine.create(vertx);
+    JsonArray array = new JsonArray()
+      .add(new JsonObject().put("bar","badger"));
+    ArrayList<String> javaList = new ArrayList<>();
+    HashMap<String, String> hashmap = new HashMap<>();
+
+    javaList.add("bar");
+    hashmap.put("foo","fox");
+
+    final JsonObject context = new JsonObject()
+      .put("foo", "badger")
+      .put("bar", "fox")
+      .put("array", array)
+      .put("arraylist", javaList)
+      .put("hashmap", hashmap)
+      .put("context", new JsonObject().put("path", "/test-pebble-template6.peb"));
+
+    final String templateExpected = "Hello badger and foxRequest path is /test-pebble-template6.peb" +
+      "Java HashMap foo foxJsonArray size 1badgerArrayList size 1bar";
+
+    engine.render(context, "src/test/filesystemtemplates/test-pebble-template6.peb", render -> {
+      should.assertTrue(render.succeeded());
+      should.assertEquals(templateExpected, render.result().toString());
+      test.complete();
+    });
+    test.await();
+  }
+
+  @Test
   public void testTemplateHandlerOnClasspathDisableCaching(TestContext should) {
     System.setProperty("vertxweb.environment", "development");
     testTemplateHandlerOnClasspath(should);
@@ -115,7 +148,7 @@ public class PebbleTemplateTest {
   @Test
   public void testTemplateHandlerChangeExtension(TestContext should) {
     final Async test = should.async();
-    TemplateEngine engine = PebbleTemplateEngine.create(vertx).setExtension("beb");
+    TemplateEngine engine = PebbleTemplateEngine.create(vertx, "beb");
 
     final JsonObject context = new JsonObject()
       .put("foo", "badger")
@@ -425,7 +458,7 @@ public class PebbleTemplateTest {
   @Test
   public void customBuilderShouldRender(TestContext should) {
     final Async test = should.async();
-    final TemplateEngine engine = PebbleTemplateEngine.create(new PebbleEngine.Builder().extension(new TestExtension()).loader(new PebbleVertxLoader(vertx)).build());
+    final TemplateEngine engine = PebbleTemplateEngine.create(vertx, new PebbleEngine.Builder().extension(new TestExtension()).loader(new PebbleVertxLoader(vertx)).build());
 
     final JsonObject context = new JsonObject()
       .put("foo", "badger")

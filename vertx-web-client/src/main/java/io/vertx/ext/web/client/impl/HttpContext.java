@@ -16,6 +16,7 @@
 package io.vertx.ext.web.client.impl;
 
 import io.netty.handler.codec.http.QueryStringEncoder;
+import io.netty.handler.codec.http.multipart.HttpPostRequestEncoder;
 import io.vertx.core.*;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpClientRequest;
@@ -25,20 +26,16 @@ import io.vertx.core.http.RequestOptions;
 import io.vertx.core.http.impl.HttpClientImpl;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
-import io.vertx.core.streams.Pump;
+import io.vertx.core.streams.Pipe;
 import io.vertx.core.streams.ReadStream;
 import io.vertx.ext.web.client.HttpRequest;
 import io.vertx.ext.web.client.HttpResponse;
-import io.vertx.ext.web.codec.BodyCodec;
 import io.vertx.ext.web.codec.spi.BodyStream;
 import io.vertx.ext.web.multipart.MultipartForm;
 
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
@@ -60,6 +57,7 @@ public class HttpContext<T> {
   private HttpResponse<T> response;
   private Throwable failure;
   private int redirects;
+  private List<String> redirectedLocations = new ArrayList<>();
 
   HttpContext(Context context, HttpClientImpl client, List<Handler<HttpContext<?>>> interceptors, Handler<AsyncResult<HttpResponse<T>>> handler) {
     this.context = context;
@@ -148,6 +146,13 @@ public class HttpContext<T> {
   }
 
   /**
+   * @return all traced redirects
+   */
+  public List<String> getRedirectedLocations() {
+    return redirectedLocations;
+  }
+
+  /**
    * Prepare the HTTP request, this executes the {@link ClientPhase#PREPARE_REQUEST} phase:
    * <ul>
    *   <li>Traverse the interceptor chain</li>
@@ -175,6 +180,17 @@ public class HttpContext<T> {
   }
 
   /**
+   * Follow the redirect, this executes the {@link ClientPhase#FOLLOW_REDIRECT} phase:
+   * <ul>
+   *   <li>Traverse the interceptor chain</li>
+   *   <li>Send the redirect request</li>
+   * </ul>
+   */
+  public void followRedirect() {
+    fire(ClientPhase.SEND_REQUEST);
+  }
+
+  /**
    * Receive the HTTP response, this executes the {@link ClientPhase#RECEIVE_RESPONSE} phase:
    * <ul>
    *   <li>Traverse the interceptor chain</li>
@@ -188,13 +204,16 @@ public class HttpContext<T> {
       redirects++;
       Future<HttpClientRequest> next = client.redirectHandler().apply(clientResponse);
       if (next != null) {
+        redirectedLocations.add(clientResponse.getHeader(HttpHeaders.LOCATION));
         next.setHandler(ar -> {
           if (ar.succeeded()) {
             HttpClientRequest nextRequest = ar.result();
             if (request.headers != null) {
               nextRequest.headers().addAll(request.headers);
             }
-            sendRequest(nextRequest);
+            this.clientRequest = nextRequest;
+            this.clientResponse = clientResponse;
+            fire(ClientPhase.FOLLOW_REDIRECT);
           } else {
             fail(ar.cause());
           }
@@ -266,6 +285,9 @@ public class HttpContext<T> {
       case SEND_REQUEST:
         handleSendRequest();
         break;
+      case FOLLOW_REDIRECT:
+        followRedirect();
+        break;
       case RECEIVE_RESPONSE:
         handleReceiveResponse();
         break;
@@ -289,17 +311,17 @@ public class HttpContext<T> {
   private void handlePrepareRequest() {
     HttpClientRequest req;
     String requestURI;
-    if (request.queryParams() != null && request.queryParams().size() > 0) {
+    if (request.params != null && request.params.size() > 0) {
       QueryStringEncoder enc = new QueryStringEncoder(request.uri);
-      request.queryParams().forEach(param -> enc.addParam(param.getKey(), param.getValue()));
+      request.params.forEach(param -> enc.addParam(param.getKey(), param.getValue()));
       requestURI = enc.toString();
     } else {
       requestURI = request.uri;
     }
     int port = request.port;
     String host = request.host;
-    if (request.ssl != request.options.isSsl()) {
-      req = client.request(request.method, new RequestOptions().setSsl(request.ssl).setHost(host).setPort
+    if (request.ssl != null && request.ssl != request.options.isSsl()) {
+      req = client.request(request.method, request.serverAddress, new RequestOptions().setSsl(request.ssl).setHost(host).setPort
         (port)
         .setURI
           (requestURI));
@@ -308,13 +330,13 @@ public class HttpContext<T> {
         // we have to create an abs url again to parse it in HttpClient
         try {
           URI uri = new URI(request.protocol, null, host, port, requestURI, null, null);
-          req = client.requestAbs(request.method, uri.toString());
+          req = client.requestAbs(request.method, request.serverAddress, uri.toString());
         } catch (URISyntaxException ex) {
           fail(ex);
           return;
         }
       } else {
-        req = client.request(request.method, port, host, requestURI);
+        req = client.request(request.method, request.serverAddress, port, host, requestURI);
       }
     }
     if (request.virtualHost != null) {
@@ -328,14 +350,17 @@ public class HttpContext<T> {
     if (request.headers != null) {
       req.headers().addAll(request.headers);
     }
+    if (request.rawMethod != null) {
+      req.setRawMethod(request.rawMethod);
+    }
     sendRequest(req);
   }
 
   private void handleReceiveResponse() {
     HttpClientResponse resp = clientResponse;
     Context context = Vertx.currentContext();
-    Future<HttpResponse<T>> fut = Future.future();
-    fut.setHandler(r -> {
+    Promise<HttpResponse<T>> promise = Promise.promise();
+    promise.future().setHandler(r -> {
       // We are running on a context (the HTTP client mandates it)
       context.runOnContext(v -> {
         if (r.succeeded()) {
@@ -346,48 +371,46 @@ public class HttpContext<T> {
       });
     });
     resp.exceptionHandler(err -> {
-      if (!fut.isComplete()) {
-        fut.fail(err);
+      if (!promise.future().isComplete()) {
+        promise.fail(err);
       }
     });
-    ((BodyCodec<T>)request.codec).create(ar2 -> {
-      resp.resume();
-      if (ar2.succeeded()) {
-        BodyStream<T> stream = ar2.result();
-        stream.exceptionHandler(err -> {
-          if (!fut.isComplete()) {
-            fut.fail(err);
-          }
-        });
-        resp.endHandler(v -> {
-          if (!fut.isComplete()) {
-            stream.end();
-            stream.result().setHandler(ar -> {
-              if (ar.succeeded()) {
-                fut.complete(new HttpResponseImpl<T>(
+    Pipe<Buffer> pipe = resp.pipe();
+    request.codec.create(ar1 -> {
+      if (ar1.succeeded()) {
+        BodyStream<T> stream = ar1.result();
+        pipe.to(stream, ar2 -> {
+          if (ar2.succeeded()) {
+            stream.result().setHandler(ar3 -> {
+              if (ar3.succeeded()) {
+                promise.complete(new HttpResponseImpl<T>(
                   resp.version(),
                   resp.statusCode(),
                   resp.statusMessage(),
                   resp.headers(),
                   resp.trailers(),
                   resp.cookies(),
-                  stream.result().result()));
+                  stream.result().result(),
+                  redirectedLocations
+                ));
               } else {
-                fut.fail(ar.cause());
+                promise.fail(ar3.cause());
               }
             });
+          } else {
+            promise.fail(ar2.cause());
           }
         });
-        Pump responsePump = Pump.pump(resp, stream);
-        responsePump.start();
       } else {
-        fail(ar2.cause());
+        pipe.close();
+        fail(ar1.cause());
       }
     });
   }
 
   private void handleSendRequest() {
-    Future<HttpClientResponse> responseFuture = Future.<HttpClientResponse>future().setHandler(ar -> {
+    Promise<HttpClientResponse> responseFuture = Promise.<HttpClientResponse>promise();
+    responseFuture.future().setHandler(ar -> {
       if (ar.succeeded()) {
         HttpClientResponse resp = ar.result();
         resp.pause();
@@ -397,7 +420,7 @@ public class HttpContext<T> {
       }
     });
     HttpClientRequest req = clientRequest;
-    req.handler(ar -> {
+    req.setHandler(ar -> {
       if (ar.succeeded()) {
         responseFuture.tryComplete(ar.result());
       } else {
@@ -428,7 +451,8 @@ public class HttpContext<T> {
         MultipartFormUpload multipartForm;
         try {
           boolean multipart = "multipart/form-data".equals(contentType);
-          multipartForm = new MultipartFormUpload(context,  (MultipartForm) this.body, multipart);
+          HttpPostRequestEncoder.EncoderMode encoderMode = request.multipartMixed ? HttpPostRequestEncoder.EncoderMode.RFC1738 : HttpPostRequestEncoder.EncoderMode.HTML5;
+          multipartForm = new MultipartFormUpload(context,  (MultipartForm) this.body, multipart, encoderMode);
           this.body = multipartForm;
         } catch (Exception e) {
           responseFuture.tryFail(e);
@@ -448,25 +472,12 @@ public class HttpContext<T> {
         if (request.headers == null || !request.headers.contains(HttpHeaders.CONTENT_LENGTH)) {
           req.setChunked(true);
         }
-        Pump pump = Pump.pump(stream, req);
-        req.exceptionHandler(err -> {
-          pump.stop();
-          stream.endHandler(null);
-          stream.resume();
-          responseFuture.tryFail(err);
+        stream.pipeTo(req, ar -> {
+          if (ar.failed()) {
+            responseFuture.tryFail(ar.cause());
+            req.reset();
+          }
         });
-        stream.exceptionHandler(err -> {
-          // Notify before closing the connection otherwise the future could be failed with connection closed exception
-          responseFuture.tryFail(err);
-          req.reset();
-        });
-        stream.endHandler(v -> {
-          req.exceptionHandler(responseFuture::tryFail);
-          req.end();
-          pump.stop();
-        });
-        pump.start();
-        stream.resume();
       } else {
         Buffer buffer;
         if (body instanceof Buffer) {

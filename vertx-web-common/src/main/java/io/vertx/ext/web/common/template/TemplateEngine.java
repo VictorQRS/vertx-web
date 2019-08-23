@@ -19,7 +19,9 @@ package io.vertx.ext.web.common.template;
 import io.vertx.codegen.annotations.GenIgnore;
 import io.vertx.codegen.annotations.VertxGen;
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonObject;
 
@@ -51,6 +53,17 @@ public interface TemplateEngine {
   }
 
   /**
+   * @see TemplateEngine#render(JsonObject, String, Handler)
+   * @param context  the routing context
+   * @param templateFileName  the template file name to use
+   */
+  default Future<Buffer> render(JsonObject context, String templateFileName) {
+    Promise<Buffer> promise = Promise.promise();
+    render(context, templateFileName, promise);
+    return promise.future();
+  }
+
+  /**
    * Render the template. Template engines that support partials/fragments should extract the template base path from
    * the template filename up to the last file separator.
    *
@@ -65,10 +78,14 @@ public interface TemplateEngine {
   void render(Map<String, Object> context, String templateFileName, Handler<AsyncResult<Buffer>> handler);
 
   /**
-   * Returns true if the template template caches template files. If false, then template files are freshly loaded each
-   * time they are used.
-   *
-   * @return True if template files are cached; otherwise, false.
+   * @see TemplateEngine#render(Map, String, Handler)
+   * @param context  the routing context
+   * @param templateFileName  the template file name to use
    */
-  boolean isCachingEnabled();
+  @GenIgnore(GenIgnore.PERMITTED_TYPE)
+  default Future<Buffer> render(Map<String, Object> context, String templateFileName) {
+    Promise<Buffer> promise = Promise.promise();
+    render(context, templateFileName, promise);
+    return promise.future();
+  }
 }

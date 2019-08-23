@@ -160,10 +160,8 @@ public class EventBusBridgeImpl implements Handler<SockJSSocket> {
       }
     } else {
       BridgeEventImpl event = eventSupplier.get();
-      Future<Boolean> fut = Future.future();
-      event.setFuture(fut);
       bridgeEventHandler.handle(event);
-      fut.setHandler(res -> {
+      event.future().setHandler(res -> {
         if (res.succeeded()) {
           if (res.result()) {
             if (okAction != null) {
@@ -257,6 +255,8 @@ public class EventBusBridgeImpl implements Handler<SockJSSocket> {
           MessageConsumer reg = eb.consumer(address).handler(handler);
           registrations.put(address, reg);
           info.handlerCount++;
+          // Notify registration completed
+          checkCallHook(() -> new BridgeEventImpl(BridgeEventType.REGISTERED, rawMsg, sock), null, null);
         } else {
           // inbound match failed
           if (debug) {
@@ -480,9 +480,9 @@ public class EventBusBridgeImpl implements Handler<SockJSSocket> {
     }
     if (send) {
       if (awaitingReply != null) {
-        awaitingReply.reply(body, new DeliveryOptions().setSendTimeout(replyTimeout).setHeaders(mHeaders), replyHandler);
+        awaitingReply.replyAndRequest(body, new DeliveryOptions().setSendTimeout(replyTimeout).setHeaders(mHeaders), replyHandler);
       } else {
-        eb.send(address, body, new DeliveryOptions().setSendTimeout(replyTimeout).setHeaders(mHeaders), replyHandler);
+        eb.request(address, body, new DeliveryOptions().setSendTimeout(replyTimeout).setHeaders(mHeaders), replyHandler);
       }
       if (replyAddress != null) {
         info.handlerCount++;

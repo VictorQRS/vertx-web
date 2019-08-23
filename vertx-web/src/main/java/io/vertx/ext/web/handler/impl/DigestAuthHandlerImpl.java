@@ -19,7 +19,11 @@ package io.vertx.ext.web.handler.impl;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.shareddata.LocalMap;
+import io.vertx.core.shareddata.Shareable;
+import io.vertx.ext.auth.VertxContextPRNG;
 import io.vertx.ext.auth.htdigest.HtdigestAuth;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.Session;
@@ -27,24 +31,35 @@ import io.vertx.ext.web.handler.DigestAuthHandler;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.HashSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.Set;
 
 /**
  * @author <a href="mailto:plopes@redhat.com">Paulo Lopes</a>
  */
 public class DigestAuthHandlerImpl extends AuthorizationAuthHandler implements DigestAuthHandler {
 
-  private static class Nonce {
-    private final long createdAt;
-    private int count;
+  /**
+   * Default name for map used to store nonces
+   */
+  private static final String DEFAULT_NONCE_MAP_NAME = "htdigest.nonces";
 
-    Nonce() {
-      createdAt = System.currentTimeMillis();
-      count = 0;
+  /**
+   * Shareable objects should be immutable.
+   */
+  private static class Nonce implements Shareable {
+    private final long createdAt;
+    private final int count;
+
+    Nonce(int count) {
+      this(System.currentTimeMillis(), count);
+    }
+
+    Nonce(long createdAt, int count) {
+      this.createdAt = createdAt;
+      this.count = count;
     }
   }
 
@@ -61,15 +76,17 @@ public class DigestAuthHandlerImpl extends AuthorizationAuthHandler implements D
     }
   }
 
-  private final SecureRandom random = new SecureRandom();
-  private final Map<String, Nonce> nonces = new HashMap<>();
+  private final VertxContextPRNG random;
+  private final LocalMap<String, Nonce> nonces;
 
   private final long nonceExpireTimeout;
 
   private long lastExpireRun;
 
-  public DigestAuthHandlerImpl(HtdigestAuth authProvider, long nonceExpireTimeout) {
+  public DigestAuthHandlerImpl(Vertx vertx, HtdigestAuth authProvider, long nonceExpireTimeout) {
     super(authProvider, authProvider.realm(), Type.DIGEST);
+    random = VertxContextPRNG.current(vertx);
+    nonces = vertx.sharedData().getLocalMap(DEFAULT_NONCE_MAP_NAME);
     this.nonceExpireTimeout = nonceExpireTimeout;
   }
 
@@ -78,7 +95,16 @@ public class DigestAuthHandlerImpl extends AuthorizationAuthHandler implements D
     // clean up nonce
     long now = System.currentTimeMillis();
     if (now - lastExpireRun > nonceExpireTimeout / 2) {
-      nonces.entrySet().removeIf(entry -> entry.getValue().createdAt + nonceExpireTimeout < now);
+      Set<String> toRemove = new HashSet<>();
+      nonces.forEach((String key, Nonce n) -> {
+        if (n != null && n.createdAt + nonceExpireTimeout < now) {
+          toRemove.add(key);
+        }
+      });
+
+      for (String n : toRemove) {
+        nonces.remove(n);
+      }
       lastExpireRun = now;
     }
 
@@ -115,15 +141,23 @@ public class DigestAuthHandlerImpl extends AuthorizationAuthHandler implements D
           return;
         }
 
-        // check for nonce counter (prevent replay attack
+        // check for nonce counter (prevent replay attack)
         if (authInfo.containsKey("qop")) {
-          int nc = Integer.parseInt(authInfo.getString("nc"));
+          int nc = Integer.parseInt(authInfo.getString("nc"), 16);
           final Nonce n = nonces.get(nonce);
           if (nc <= n.count) {
             handler.handle(Future.failedFuture(UNAUTHORIZED));
             return;
           }
-          n.count = nc;
+          // update the nounce count
+          nonces.put(nonce, new Nonce(n.createdAt, nc));
+        }
+
+        final String uri = authInfo.getString("uri");
+
+        if (!uri.equalsIgnoreCase(context.request().uri())) {
+          handler.handle(Future.failedFuture(UNAUTHORIZED));
+          return;
         }
       } catch (RuntimeException e) {
         handler.handle(Future.failedFuture(e));
@@ -153,7 +187,7 @@ public class DigestAuthHandlerImpl extends AuthorizationAuthHandler implements D
     // generate nonce
     String nonce = md5(bytes);
     // save it
-    nonces.put(nonce, new Nonce());
+    nonces.put(nonce, new Nonce(0));
 
     // generate opaque
     String opaque = null;
